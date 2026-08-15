@@ -24,6 +24,8 @@ class CaptureSettings:
     cooldown_s: float = 0.8
     preview: bool = True
     auto_capture: bool = True
+    streamer_started_by_quickstart: bool = False
+    streamer_ssh_route: str | None = None
 
 
 def _utc_now() -> str:
@@ -53,6 +55,8 @@ def _write_manifest(
     accepted: int,
     frame_index: int,
     settings: CaptureSettings,
+    stream_host: str,
+    stream_port: int,
 ) -> None:
     manifest = {
         "schema": "dexmate_calib.intrinsic_session.v1",
@@ -69,13 +73,15 @@ def _write_manifest(
             **(identity or {}),
         },
         "streamer": {
-            "host": "192.168.50.22",
-            "port": 30000,
+            "host": stream_host,
+            "port": stream_port,
             "expected_command": (
-                "./build/zed_streamer --clean --jpeg-quality 100 --max-fps 30 "
-                "--resolution HD1200 --no-right --no-depth --no-pc --no-imu"
+                "sudo /home/dexmate-nano/zed_stream/build/zed_streamer "
+                "--jpeg-quality 100 --max-fps 30 --resolution HD1200 "
+                "--no-right --no-depth --no-pc --no-imu"
             ),
-            "remote_process_verified": False,
+            "started_by_quickstart": settings.streamer_started_by_quickstart,
+            "ssh_route": settings.streamer_ssh_route,
         },
         "board": {
             "name": board.name,
@@ -140,6 +146,8 @@ def capture_session(
         accepted=accepted,
         frame_index=frame_index,
         settings=settings,
+        stream_host=client.host,
+        stream_port=client.port,
     )
 
     with records_path.open("w", encoding="utf-8") as records, client:
@@ -233,6 +241,8 @@ def capture_session(
                     accepted=accepted,
                     frame_index=frame_index,
                     settings=settings,
+                    stream_host=client.host,
+                    stream_port=client.port,
                 )
 
     if settings.preview:
@@ -247,5 +257,7 @@ def capture_session(
         accepted=accepted,
         frame_index=frame_index,
         settings=settings,
+        stream_host=client.host,
+        stream_port=client.port,
     )
     return session_dir

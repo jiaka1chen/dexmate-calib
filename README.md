@@ -3,8 +3,26 @@
 Dexmate 相机标定工具。当前实现聚焦头部 ZED X Mini 左目内参，正式模式固定为
 **HD1200 / 1920×1200 / `sl::VIEW::LEFT` rectified image**。
 
-这个仓库不会自动启动、停止或清理机器人上的 ZED 进程。`--clean` 会影响其他 ZED
-应用，必须由操作者在 Nano 上明确执行。
+推荐使用 `intrinsics quickstart`：本机通过公钥 SSH 保持一个 Nano 会话，在该会话中
+启动固定参数 streamer，验证 stream 后进入采集，并在采集结束或异常时关闭这次会话和
+streamer。它不会在 Nano 安装 service，不写 sudoers，不使用 `--clean`。
+
+## Quick start
+
+完整的首次网络、公钥和安全说明见 [docs/quickstart.md](docs/quickstart.md)。满足其中前提后：
+
+```bash
+cd ~/Documents/Projects/dexmate/dexmate-calib
+uv sync --extra dev
+source .venv/bin/activate
+
+dexcalib intrinsics quickstart \
+  --board dexmate-10x7 \
+  --samples 40
+```
+
+默认情况下 SSH 登录本身免密，但 Nano 上的 `sudo` 可能在当前终端提示一次密码。密码不
+经过 Python、不保存；同一 SSH 会话持续到采集结束，所以停止 streamer 不需要再次认证。
 
 ## 已锁定的硬件和标定板
 
@@ -65,15 +83,32 @@ dexcalib doctor network
 
 离线时该命令失败是正常的，不影响离线测试和求解。
 
+### 一站式启动的行为边界
+
+```bash
+dexcalib intrinsics quickstart --board dexmate-10x7 --samples 40
+```
+
+它按顺序执行：
+
+1. 用 `BatchMode=yes` 测试直连 `.22`，失败后才 fallback 到经 `.20` 的 ProxyCommand。
+2. 若 `.22:30000` 尚未监听，在保持的 SSH PTY 中启动固定的 HD1200 left-only 命令。
+3. 强制验证 ZS protocol、serial `59595115`、1920×1200、timestamp 和 JPEG decode。
+4. 进入 ChArUco 采集。
+5. 仅当 streamer 是本次 quickstart 启动的，采集结束或异常后才关闭它。
+
+若端口开始时已经有 streamer，quickstart 会验证并复用，但不会在结束时停止别人的进程。
+如果 Nano 已配置当前用户直接访问相机，可以加 `--no-sudo`。默认不使用 `--clean`，不会
+自动杀其他 ZED 程序。
+
 ## 在 Nano 上启动内参采集 streamer
 
-先确认没有其他任务需要 ZED，然后由操作者登录 Nano：
+这是 quickstart 失败时的手动 fallback。先确认没有其他任务需要 ZED，然后登录 Nano：
 
 ```bash
 ssh dexmate-nano
 cd ~/zed_stream
 sudo ./build/zed_streamer \
-  --clean \
   --jpeg-quality 100 \
   --max-fps 30 \
   --resolution HD1200 \
@@ -84,7 +119,8 @@ sudo ./build/zed_streamer \
 ```
 
 这里关闭 depth，因为内参只需要左目 JPEG。不要用 HD1080；采集端会拒绝任何不是
-1920×1200 的 stream。
+1920×1200 的 stream。如果确实需要 `--clean`，必须先确认其他 ZED 任务可以被终止，再由
+操作者显式添加；quickstart 永远不会自动添加它。
 
 另一个本机终端验证实际数据：
 
@@ -164,4 +200,6 @@ gate、board schema 和 synthetic rectified pinhole calibration。
 - `calibration_data/` 默认被 Git 忽略。
 - 仓库中不得保存 SSH 密码、PIN、私钥或证书。
 - 工具不会修改 Nano 上已有且未提交的 `zed_stream` 源码。
+- quickstart 不会在 Nano 安装服务、包或持久配置，也不会写入 sudoers。
+- SSH 私钥始终只留在 Mac；只把 `.pub` 公钥追加到远端 `authorized_keys`。
 - 不会在断线重连时静默切换 camera、resolution 或 board profile。

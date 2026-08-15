@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import yaml
@@ -15,6 +16,7 @@ from dexmate_calib.diagnostics.doctor import doctor_network, doctor_stream, prin
 from dexmate_calib.intrinsics.capture import CaptureSettings, capture_session
 from dexmate_calib.intrinsics.detector import CharucoDetector
 from dexmate_calib.intrinsics.solve import solve_session
+from dexmate_calib.remote.streamer import RemoteStreamerManager
 from dexmate_calib.streaming.zed_stream import ZedStreamClient
 
 
@@ -64,7 +66,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     if args.doctor_command == "network":
         report = doctor_network()
         print_report(report)
-        return 0 if all(item["ok"] for item in report.values()) else 2
+        nano_ssh_ok = report["nano_ssh_direct"]["ok"] or report["nano_ssh_proxy"]["ok"]
+        return 0 if nano_ssh_ok else 2
     report = doctor_stream(
         args.host,
         args.port,
@@ -78,7 +81,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def _cmd_intrinsics(args: argparse.Namespace) -> int:
-    if args.intrinsics_command == "capture":
+    if args.intrinsics_command in {"capture", "quickstart"}:
         board = resolve_board_profile(args.board)
         client = ZedStreamClient(
             args.host,
@@ -98,7 +101,41 @@ def _cmd_intrinsics(args: argparse.Namespace) -> int:
             preview=not args.no_preview,
             auto_capture=not args.manual,
         )
-        session = capture_session(board, client, settings)
+        if args.intrinsics_command == "capture":
+            session = capture_session(board, client, settings)
+            print(session)
+            return 0
+
+        manager = RemoteStreamerManager(
+            route_preference=args.ssh_route,
+            use_sudo=not args.no_sudo,
+        )
+        started_here = False
+        try:
+            started_here = manager.ensure_started(
+                args.host,
+                args.port,
+                timeout_s=args.startup_timeout,
+            )
+            stream_report = doctor_stream(
+                args.host,
+                args.port,
+                frames=args.preflight_frames,
+                expected_serial=args.expected_serial,
+                expected_width=1920,
+                expected_height=1200,
+            )
+            print("Stream preflight passed:")
+            print_report(stream_report)
+            settings = replace(
+                settings,
+                streamer_started_by_quickstart=started_here,
+                streamer_ssh_route=manager.select_route().name,
+            )
+            session = capture_session(board, client, settings)
+        finally:
+            if manager.process is not None:
+                manager.stop_attached(host=args.host, port=args.port)
         print(session)
         return 0
     result = solve_session(
@@ -139,24 +176,44 @@ def build_parser() -> argparse.ArgumentParser:
     intrinsics = sub.add_parser("intrinsics", help="Capture and solve head intrinsics")
     intrinsics_sub = intrinsics.add_subparsers(dest="intrinsics_command", required=True)
     capture = intrinsics_sub.add_parser("capture")
-    capture.add_argument("--board", default="dexmate-10x7")
-    capture.add_argument("--host", default="192.168.50.22")
-    capture.add_argument("--port", type=int, default=30000)
-    capture.add_argument("--expected-serial", type=_optional_serial, default=59595115)
-    capture.add_argument("--output", default="calibration_data/head_left")
-    capture.add_argument("--samples", type=int, default=40)
-    capture.add_argument("--min-corners", type=int, default=20)
-    capture.add_argument("--min-coverage", type=float, default=0.025)
-    capture.add_argument("--min-sharpness", type=float, default=80.0)
-    capture.add_argument("--min-diversity", type=float, default=0.08)
-    capture.add_argument("--cooldown", type=float, default=0.8)
-    capture.add_argument("--manual", action="store_true")
-    capture.add_argument("--no-preview", action="store_true")
+    _add_capture_arguments(capture)
+    quickstart = intrinsics_sub.add_parser(
+        "quickstart", help="SSH-start streamer, validate it, capture, then stop it"
+    )
+    _add_capture_arguments(quickstart)
+    quickstart.add_argument(
+        "--ssh-route",
+        choices=("auto", "direct", "proxy"),
+        default="auto",
+    )
+    quickstart.add_argument(
+        "--no-sudo",
+        action="store_true",
+        help="Run streamer as dexmate-nano instead of prompting for remote sudo",
+    )
+    quickstart.add_argument("--startup-timeout", type=float, default=30.0)
+    quickstart.add_argument("--preflight-frames", type=int, default=10)
     solve = intrinsics_sub.add_parser("solve")
     solve.add_argument("session")
     solve.add_argument("--min-views", type=int, default=20)
     solve.add_argument("--max-view-error", type=float, default=0.8)
     return parser
+
+
+def _add_capture_arguments(command: argparse.ArgumentParser) -> None:
+    command.add_argument("--board", default="dexmate-10x7")
+    command.add_argument("--host", default="192.168.50.22")
+    command.add_argument("--port", type=int, default=30000)
+    command.add_argument("--expected-serial", type=_optional_serial, default=59595115)
+    command.add_argument("--output", default="calibration_data/head_left")
+    command.add_argument("--samples", type=int, default=40)
+    command.add_argument("--min-corners", type=int, default=20)
+    command.add_argument("--min-coverage", type=float, default=0.025)
+    command.add_argument("--min-sharpness", type=float, default=80.0)
+    command.add_argument("--min-diversity", type=float, default=0.08)
+    command.add_argument("--cooldown", type=float, default=0.8)
+    command.add_argument("--manual", action="store_true")
+    command.add_argument("--no-preview", action="store_true")
 
 
 def main(argv: list[str] | None = None) -> int:

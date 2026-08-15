@@ -16,4 +16,22 @@ ssh:
   thor_alias: dexmate
   nano_alias: dexmate-nano
   nano_direct_alias: dexmate-nano-direct
-
+  thor_target: dexmate@192.168.50.20
+  nano_target: dexmate-nano@192.168.50.22
+  quickstart_route: auto
+streamer:
+  binary: /home/dexmate-nano/zed_stream/build/zed_streamer
+  quickstart_use_sudo: true
+  quickstart_uses_clean: false
+  lifecycle: attached_ssh_session
+  arguments:
+    - --jpeg-quality
+    - "100"
+    - --max-fps
+    - "30"
+    - --resolution
+    - HD1200
+    - --no-right
+    - --no-depth
+    - --no-pc
+    - --no-imu
