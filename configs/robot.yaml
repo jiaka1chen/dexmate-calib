@@ -1,0 +1,19 @@
+schema_version: 1
+robot: dexmate
+camera:
+  name: head_left
+  host: 192.168.50.22
+  port: 30000
+  expected_serial: 59595115
+  expected_resolution:
+    width: 1920
+    height: 1200
+  zed_mode: HD1200
+  image_view: LEFT
+  image_geometry: rectified
+  distortion_model: none
+ssh:
+  thor_alias: dexmate
+  nano_alias: dexmate-nano
+  nano_direct_alias: dexmate-nano-direct
+
