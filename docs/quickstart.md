@@ -227,6 +227,11 @@ quickstart 不会通过 `--clean` 自动解决相机占用，因为那可能终�
 - 包含绕三个方向的倾角，不要全部正对相机。
 - 每次移动后停稳，避免 motion blur。
 - 默认自动保存质量合格且与已有样本足够不同的视图。
+- 实时 HUD 显示 markers/corners、板内行列覆盖、画面 coverage、清晰度和板的像素尺度。
+- 绿色 marker/corner overlay 表示当前检测结果；状态行会说明 cooldown、重复视角或具体
+  质量拒绝原因。
+- 自动模式默认 10 Hz 做 ChArUco 判断，同时持续消费全部 stream frame；cooldown 内跳过
+  homography/Laplacian/Tenengrad 重计算。若要逐帧检测可显式加 `--detect-fps 0`。
 
 目标约 40 张；有效结果建议不少于 25 张。原始 JPEG 和 partial manifest 会实时落盘。
 
@@ -240,3 +245,10 @@ dexcalib intrinsics solve calibration_data/head_left/<session-name>
 
 检查 `results/` 中的 `all_gates_pass`、RMS、held-out error 和 split stability。任何 gate 失败
 都应优先补采视图或检查板/成像，而不是直接降低阈值。
+
+同时检查：
+
+- `sample_selection.csv`：每张图的保留/拒绝原因和质量指标。
+- `capture_contact_sheet.jpg`：采集视图覆盖概览。
+- `reprojection_contact_sheet.jpg`：检测角点与重投影位置的可视比较。
+- `cross_validation.json`：确定性 K-fold held-out 误差和各 fold 的 K 稳定性。

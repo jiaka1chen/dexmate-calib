@@ -36,6 +36,14 @@ dexcalib intrinsics quickstart \
 
 配置都在 `configs/`，不会在求解代码中静默猜测或交换板的 X/Y。
 
+## 方法来源与 Dexmate 约束
+
+采集质量、标定板区域清晰度、姿态多样性、稳健离群值剔除和交叉验证的组织方式参考了
+同级 `RobotCamCalib/intr_calib_charuco.py` 的成熟流程，并在本仓库中独立实现。当前工具
+不会 import 或运行 RobotCamCalib，也不会引入其中的 USB camera、fisheye、AprilTag Grid
+或 raw-image distortion 模型。Dexmate 输入是 ZED SDK 的 rectified `LEFT`，所以求解器始终
+固定全部 distortion coefficients 为零，并拒绝非 HD1200/1920×1200 session。
+
 ## 安装
 
 建议使用独立环境：
@@ -157,6 +165,16 @@ dexcalib intrinsics capture \
 dexcalib intrinsics capture --help
 ```
 
+实时窗口会绘制 ArUco marker 和 ChArUco corner，并显示 corner/grid 数量、画面覆盖、
+board bbox、清晰度、pixels-per-square、冷却和重复视角状态。质量筛选除角点数量外还会
+检查角点在板内的行列分布，避免只检测到集中在一小块区域的角点。`--manual` 依赖预览
+窗口接收空格键，因此不能与 `--no-preview` 同时使用。
+
+自动模式默认以 10 Hz 处理 ChArUco（`--detect-fps 10`），但仍持续读取所有 TCP frame，
+不会因为降频而让 socket 数据积压。0.8 秒保存 cooldown 内使用轻量质量路径；只有可能
+成为候选的帧才执行 homography 展平和 Laplacian/Tenengrad 详细分析。手动模式保持逐帧
+检测。调试时可用 `--detect-fps 0` 恢复逐 stream frame 检测。
+
 ## 求解
 
 采集可在断开机器人后离线求解：
@@ -169,9 +187,11 @@ dexcalib intrinsics solve \
 求解器会重新检测所有原始 JPEG，固定所有 distortion coefficients 为零，只估计
 `fx, fy, cx, cy` 和每个 board pose，并执行：
 
+- 标定板 homography 展平后的尺度感知清晰度检查
+- 确定性的姿态多样性选择（样本超过 `--max-views` 时）
 - 每视图 reprojection error
 - robust outlier rejection
-- deterministic held-out validation
+- deterministic K-fold held-out validation
 - even/odd split 参数稳定性检查
 
 结果写入 session 的 `results/`：
@@ -181,7 +201,16 @@ intrinsics_head_left_HD1200_1920x1200.yaml
 intrinsics_head_left_HD1200_1920x1200.json
 K.npy
 reprojection_errors.csv
+sample_selection.csv
+cross_validation.json
+quality_summary.json
+capture_contact_sheet.jpg
+reprojection_contact_sheet.jpg
 ```
+
+绿色点是检测角点，紫色点是最终模型的重投影位置，黄色短线显示两者之间的残差。
+`sample_selection.csv` 会为每张图片记录最终保留或拒绝原因，包括 motion blur、pose
+redundancy 和 reprojection outlier。
 
 1920×1200 是 source of truth。任何下游 resize/crop 必须显式变换 `K`；不能直接把
 HD1200 内参用于 HD1080，也不能把 1920×1200 非等比例拉伸到 640×360 后仍沿用原 K。
@@ -193,7 +222,8 @@ pytest
 ```
 
 单元测试不需要连接机器人，覆盖 ZS01/ZS02 header、跳过 depth payload、HD1200/serial
-gate、board schema 和 synthetic rectified pinhole calibration。
+gate、board schema、质量筛选、交叉验证、synthetic rectified pinhole calibration 和完整
+synthetic session 输出。
 
 ## 数据与安全
 
