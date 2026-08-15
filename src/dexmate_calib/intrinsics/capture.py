@@ -20,8 +20,12 @@ class CaptureSettings:
     min_corners: int = 20
     min_coverage: float = 0.025
     min_sharpness: float = 80.0
+    min_grid_rows: int = 3
+    min_grid_cols: int = 3
+    min_board_bbox_fraction: float = 0.12
     min_diversity_distance: float = 0.08
     cooldown_s: float = 0.8
+    detection_fps: float = 10.0
     preview: bool = True
     auto_capture: bool = True
     streamer_started_by_quickstart: bool = False
@@ -37,11 +41,72 @@ def _quality_reason(detection: Detection | None, settings: CaptureSettings) -> s
         return "board_not_detected"
     if detection.corner_count < settings.min_corners:
         return f"corners<{settings.min_corners}"
+    if detection.grid_rows < settings.min_grid_rows:
+        return f"grid_rows<{settings.min_grid_rows}"
+    if detection.grid_cols < settings.min_grid_cols:
+        return f"grid_cols<{settings.min_grid_cols}"
+    if detection.board_bbox_fraction < settings.min_board_bbox_fraction:
+        return f"board_bbox<{settings.min_board_bbox_fraction:.2f}"
     if detection.coverage_fraction < settings.min_coverage:
         return f"coverage<{settings.min_coverage:.3f}"
     if detection.sharpness < settings.min_sharpness:
         return f"sharpness<{settings.min_sharpness:.1f}"
     return None
+
+
+def detection_is_due(
+    now: float,
+    last_detection_monotonic: float,
+    settings: CaptureSettings,
+) -> bool:
+    if settings.detection_fps < 0:
+        raise ValueError("detection_fps must be >= 0")
+    if not settings.auto_capture or settings.detection_fps == 0:
+        return True
+    return now - last_detection_monotonic >= 1.0 / settings.detection_fps
+
+
+def render_capture_preview(
+    detector: CharucoDetector,
+    image,
+    detection: Detection | None,
+    *,
+    accepted: int,
+    target: int,
+    state: str,
+):
+    import cv2
+
+    display = detector.draw(image, detection)
+    color = (0, 220, 0) if state in {"ready", "saved"} else (0, 170, 255)
+    lines = [f"saved {accepted}/{target} | {state}"]
+    if detection is not None:
+        lines.extend(
+            [
+                (
+                    f"markers={detection.marker_count} corners={detection.corner_count} "
+                    f"grid={detection.grid_cols}x{detection.grid_rows}"
+                ),
+                (
+                    f"coverage={detection.coverage_fraction:.3f} "
+                    f"board_bbox={detection.board_bbox_fraction:.2f} "
+                    f"sharp={detection.sharpness:.1f} "
+                    f"scale={detection.pixels_per_square:.1f}px/square"
+                ),
+            ]
+        )
+    for index, line in enumerate(lines):
+        cv2.putText(
+            display,
+            line,
+            (24, 42 + index * 34),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.78 if index == 0 else 0.62,
+            color if index == 0 else (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+    return display
 
 
 def _write_manifest(
@@ -96,8 +161,12 @@ def _write_manifest(
                 "min_corners": settings.min_corners,
                 "min_coverage": settings.min_coverage,
                 "min_sharpness": settings.min_sharpness,
+                "min_grid_rows": settings.min_grid_rows,
+                "min_grid_cols": settings.min_grid_cols,
+                "min_board_bbox_fraction": settings.min_board_bbox_fraction,
                 "min_diversity_distance": settings.min_diversity_distance,
                 "cooldown_s": settings.cooldown_s,
+                "detection_fps": settings.detection_fps,
             },
         },
     }
@@ -133,8 +202,10 @@ def capture_session(
     accepted = 0
     frame_index = 0
     last_capture_monotonic = -1e9
+    last_detection_monotonic = -1e9
     identity: dict | None = None
     stop_requested = False
+    cached_shown = None
 
     _write_manifest(
         manifest_path,
@@ -154,8 +225,8 @@ def capture_session(
         while accepted < settings.max_samples and not stop_requested:
             frame = client.receive()
             frame_index += 1
-            image = frame.decode_left_bgr()
-            height, width = image.shape[:2]
+            assert frame.left_width is not None and frame.left_height is not None
+            width, height = frame.left_width, frame.left_height
             if identity is None:
                 identity = {
                     "protocol": frame.protocol,
@@ -165,7 +236,19 @@ def capture_session(
                     "channel_mask": frame.channel_mask,
                 }
 
-            detection = detector.detect(image)
+            now = time.monotonic()
+            if not detection_is_due(now, last_detection_monotonic, settings):
+                if settings.preview and cached_shown is not None:
+                    cv2.imshow("Dexmate HD1200 intrinsic capture", cached_shown)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key in (27, ord("q")):
+                        stop_requested = True
+                continue
+
+            last_detection_monotonic = now
+            image = frame.decode_left_bgr()
+            detailed_quality = now - last_capture_monotonic >= settings.cooldown_s
+            detection = detector.detect(image, detailed_quality=detailed_quality)
             reason = _quality_reason(detection, settings)
             signature = detection.signature(width, height) if detection is not None else None
             if reason is None and signatures:
@@ -173,26 +256,25 @@ def capture_session(
                 if nearest < settings.min_diversity_distance:
                     reason = f"redundant<{settings.min_diversity_distance:.3f}"
 
-            now = time.monotonic()
             eligible = reason is None and now - last_capture_monotonic >= settings.cooldown_s
             manual_capture = False
-            display = detector.draw(image, detection)
-            status = f"saved {accepted}/{settings.max_samples} | " + (
-                "ready" if reason is None else reason
+            display_state = reason or (
+                "ready"
+                if now - last_capture_monotonic >= settings.cooldown_s
+                else f"cooldown<{settings.cooldown_s:.1f}s"
             )
-            cv2.putText(
-                display,
-                status,
-                (24, 42),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.9,
-                (0, 220, 0) if reason is None else (0, 170, 255),
-                2,
-                cv2.LINE_AA,
+            display = render_capture_preview(
+                detector,
+                image,
+                detection,
+                accepted=accepted,
+                target=settings.max_samples,
+                state=display_state,
             )
             if settings.preview:
                 scale = min(1.0, 1280.0 / width, 800.0 / height)
                 shown = cv2.resize(display, None, fx=scale, fy=scale) if scale < 1.0 else display
+                cached_shown = shown
                 cv2.imshow("Dexmate HD1200 intrinsic capture", shown)
                 key = cv2.waitKey(1) & 0xFF
                 if key in (27, ord("q")):
@@ -223,6 +305,12 @@ def capture_session(
                     "marker_count": detection.marker_count,
                     "coverage_fraction": detection.coverage_fraction,
                     "sharpness": detection.sharpness,
+                    "grid_rows": detection.grid_rows,
+                    "grid_cols": detection.grid_cols,
+                    "board_bbox_fraction": detection.board_bbox_fraction,
+                    "pixels_per_square": detection.pixels_per_square,
+                    "rectified_laplacian_var": detection.rectified_laplacian_var,
+                    "rectified_tenengrad_mean": detection.rectified_tenengrad_mean,
                     "centroid_xy": list(detection.centroid_xy),
                     "orientation_rad": detection.orientation_rad,
                 }

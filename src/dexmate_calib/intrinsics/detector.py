@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from dexmate_calib.boards.config import BoardProfile
+from dexmate_calib.intrinsics.quality import measure_board_image_quality
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,14 @@ class Detection:
     sharpness: float
     centroid_xy: tuple[float, float]
     orientation_rad: float
+    grid_rows: int
+    grid_cols: int
+    board_bbox_fraction: float
+    pixels_per_square: float
+    rectified_laplacian_var: float
+    rectified_tenengrad_mean: float
+    marker_corners: tuple[np.ndarray, ...]
+    marker_ids: np.ndarray | None
 
     def signature(self, width: int, height: int) -> np.ndarray:
         return np.array(
@@ -49,7 +58,7 @@ class CharucoDetector:
             self.detector = None
             self.aruco_detector = cv2.aruco.ArucoDetector(self.dictionary, detector_params)
 
-    def detect(self, image_bgr: np.ndarray) -> Detection | None:
+    def detect(self, image_bgr: np.ndarray, *, detailed_quality: bool = True) -> Detection | None:
         cv2 = self.cv2
         gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
         if self.detector is not None:
@@ -69,39 +78,43 @@ class CharucoDetector:
         order = np.argsort(ids_flat)
         points = points[order]
         ids_flat = ids_flat[order]
-        x_min, y_min = points.min(axis=0)
-        x_max, y_max = points.max(axis=0)
-        height, width = gray.shape
-        coverage = float(max(0.0, x_max - x_min) * max(0.0, y_max - y_min) / (width * height))
-
-        pad = 8
-        x0 = max(0, int(x_min) - pad)
-        y0 = max(0, int(y_min) - pad)
-        x1 = min(width, int(x_max) + pad + 1)
-        y1 = min(height, int(y_max) + pad + 1)
-        roi = gray[y0:y1, x0:x1]
-        sharpness = float(cv2.Laplacian(roi, cv2.CV_64F).var()) if roi.size else 0.0
-
-        centered = points - points.mean(axis=0, keepdims=True)
-        covariance = centered.T @ centered
-        eigenvalues, eigenvectors = np.linalg.eigh(covariance)
-        axis = eigenvectors[:, int(np.argmax(eigenvalues))]
-        orientation = float(math.atan2(float(axis[1]), float(axis[0])))
+        quality = measure_board_image_quality(
+            gray,
+            points,
+            ids_flat,
+            self.profile.squares_x,
+            self.profile.squares_y,
+            detailed=detailed_quality,
+        )
 
         return Detection(
             charuco_corners=points.reshape(-1, 1, 2),
             charuco_ids=ids_flat.reshape(-1, 1),
             marker_count=0 if marker_ids is None else len(marker_ids),
             corner_count=len(points),
-            coverage_fraction=coverage,
-            sharpness=sharpness,
-            centroid_xy=(float(points[:, 0].mean()), float(points[:, 1].mean())),
-            orientation_rad=orientation,
+            coverage_fraction=quality.image_coverage_fraction,
+            sharpness=quality.roi_laplacian_var,
+            centroid_xy=quality.centroid_xy,
+            orientation_rad=quality.orientation_rad,
+            grid_rows=quality.grid_rows,
+            grid_cols=quality.grid_cols,
+            board_bbox_fraction=quality.board_bbox_fraction,
+            pixels_per_square=quality.pixels_per_square,
+            rectified_laplacian_var=quality.rectified_laplacian_var,
+            rectified_tenengrad_mean=quality.rectified_tenengrad_mean,
+            marker_corners=tuple(marker_corners) if marker_corners is not None else (),
+            marker_ids=None if marker_ids is None else np.asarray(marker_ids, dtype=np.int32),
         )
 
     def draw(self, image_bgr: np.ndarray, detection: Detection | None) -> np.ndarray:
         output = image_bgr.copy()
         if detection is not None:
+            if detection.marker_ids is not None and detection.marker_corners:
+                self.cv2.aruco.drawDetectedMarkers(
+                    output,
+                    list(detection.marker_corners),
+                    detection.marker_ids,
+                )
             self.cv2.aruco.drawDetectedCornersCharuco(
                 output, detection.charuco_corners, detection.charuco_ids
             )

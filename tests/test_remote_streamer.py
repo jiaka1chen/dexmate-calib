@@ -4,7 +4,9 @@ import signal
 import subprocess
 from unittest.mock import Mock
 
-from dexmate_calib.cli import build_parser
+import pytest
+
+from dexmate_calib.cli import _cmd_intrinsics, build_parser
 from dexmate_calib.remote.streamer import RemoteStreamerManager, SSHRoute
 
 
@@ -88,3 +90,19 @@ def test_quickstart_cli_defaults_to_safe_fixed_profile() -> None:
     assert args.expected_serial == 59595115
     assert args.ssh_route == "auto"
     assert args.no_sudo is False
+    assert args.min_grid_rows == 3
+    assert args.min_grid_cols == 3
+    assert args.min_board_bbox_fraction == 0.12
+    assert args.detect_fps == 10.0
+
+
+def test_manual_capture_requires_preview() -> None:
+    args = build_parser().parse_args(["intrinsics", "capture", "--manual", "--no-preview"])
+    with pytest.raises(ValueError, match="preview window"):
+        _cmd_intrinsics(args)
+
+
+def test_solver_cli_defaults_to_deterministic_validation() -> None:
+    args = build_parser().parse_args(["intrinsics", "solve", "session"])
+    assert args.max_views == 40
+    assert args.cross_validation_folds == 5

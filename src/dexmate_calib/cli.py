@@ -82,6 +82,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
 def _cmd_intrinsics(args: argparse.Namespace) -> int:
     if args.intrinsics_command in {"capture", "quickstart"}:
+        if args.manual and args.no_preview:
+            raise ValueError("--manual requires the preview window; remove --no-preview")
+        if args.detect_fps < 0:
+            raise ValueError("--detect-fps must be >= 0")
         board = resolve_board_profile(args.board)
         client = ZedStreamClient(
             args.host,
@@ -96,8 +100,12 @@ def _cmd_intrinsics(args: argparse.Namespace) -> int:
             min_corners=args.min_corners,
             min_coverage=args.min_coverage,
             min_sharpness=args.min_sharpness,
+            min_grid_rows=args.min_grid_rows,
+            min_grid_cols=args.min_grid_cols,
+            min_board_bbox_fraction=args.min_board_bbox_fraction,
             min_diversity_distance=args.min_diversity,
             cooldown_s=args.cooldown,
+            detection_fps=args.detect_fps,
             preview=not args.no_preview,
             auto_capture=not args.manual,
         )
@@ -142,6 +150,8 @@ def _cmd_intrinsics(args: argparse.Namespace) -> int:
         args.session,
         max_view_error_px=args.max_view_error,
         min_views=args.min_views,
+        max_views=args.max_views,
+        cross_validation_folds=args.cross_validation_folds,
     )
     print(result)
     return 0
@@ -197,6 +207,8 @@ def build_parser() -> argparse.ArgumentParser:
     solve.add_argument("session")
     solve.add_argument("--min-views", type=int, default=20)
     solve.add_argument("--max-view-error", type=float, default=0.8)
+    solve.add_argument("--max-views", type=int, default=40)
+    solve.add_argument("--cross-validation-folds", type=int, default=5)
     return parser
 
 
@@ -210,8 +222,22 @@ def _add_capture_arguments(command: argparse.ArgumentParser) -> None:
     command.add_argument("--min-corners", type=int, default=20)
     command.add_argument("--min-coverage", type=float, default=0.025)
     command.add_argument("--min-sharpness", type=float, default=80.0)
+    command.add_argument("--min-grid-rows", type=int, default=3)
+    command.add_argument("--min-grid-cols", type=int, default=3)
+    command.add_argument(
+        "--min-board-bbox",
+        dest="min_board_bbox_fraction",
+        type=float,
+        default=0.12,
+    )
     command.add_argument("--min-diversity", type=float, default=0.08)
     command.add_argument("--cooldown", type=float, default=0.8)
+    command.add_argument(
+        "--detect-fps",
+        type=float,
+        default=10.0,
+        help="Auto-mode ChArUco processing rate; 0 processes every stream frame",
+    )
     command.add_argument("--manual", action="store_true")
     command.add_argument("--no-preview", action="store_true")
 
