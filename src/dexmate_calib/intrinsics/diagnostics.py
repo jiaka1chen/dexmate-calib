@@ -14,6 +14,7 @@ def write_json(path: Path, value: Any) -> None:
 
 def write_selection_csv(path: Path, rows: list[dict]) -> None:
     fieldnames = [
+        "session",
         "image",
         "status",
         "reason",

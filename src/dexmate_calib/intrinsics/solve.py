@@ -352,7 +352,10 @@ def _render_reprojection_images(
     for observation, rvec, tvec, error in zip(
         observations, fit.rvecs, fit.tvecs, fit.per_view_errors
     ):
-        image = cv2.imread(str(session_dir / observation.image_name), cv2.IMREAD_COLOR)
+        image_path = observation.metrics.get("_image_path")
+        if image_path is None:
+            image_path = session_dir / observation.image_name
+        image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
         if image is None:
             continue
         projected, _ = cv2.projectPoints(

@@ -15,6 +15,7 @@ from dexmate_calib.boards.config import (
 from dexmate_calib.diagnostics.doctor import doctor_network, doctor_stream, print_report
 from dexmate_calib.intrinsics.capture import CaptureSettings, capture_session
 from dexmate_calib.intrinsics.detector import CharucoDetector
+from dexmate_calib.intrinsics.multi_solve import solve_sessions
 from dexmate_calib.intrinsics.solve import solve_session
 from dexmate_calib.remote.streamer import RemoteStreamerManager
 from dexmate_calib.streaming.zed_stream import ZedStreamClient
@@ -149,13 +150,24 @@ def _cmd_intrinsics(args: argparse.Namespace) -> int:
             result = solve_session(session)
             print(result)
         return 0
-    result = solve_session(
-        args.session,
-        max_view_error_px=args.max_view_error,
-        min_views=args.min_views,
-        max_views=args.max_views,
-        cross_validation_folds=args.cross_validation_folds,
-    )
+    if args.intrinsics_command == "solve":
+        result = solve_session(
+            args.session,
+            max_view_error_px=args.max_view_error,
+            min_views=args.min_views,
+            max_views=args.max_views,
+            cross_validation_folds=args.cross_validation_folds,
+        )
+    else:
+        result = solve_sessions(
+            args.sessions,
+            output=args.output,
+            max_view_error_px=args.max_view_error,
+            min_views=args.min_views,
+            min_views_per_session=args.min_views_per_session,
+            max_views_per_session=args.max_views_per_session,
+            cross_validation_folds=args.cross_validation_folds,
+        )
     print(result)
     return 0
 
@@ -217,6 +229,17 @@ def build_parser() -> argparse.ArgumentParser:
     solve.add_argument("--max-view-error", type=float, default=0.8)
     solve.add_argument("--max-views", type=int, default=40)
     solve.add_argument("--cross-validation-folds", type=int, default=5)
+    solve_multi = intrinsics_sub.add_parser(
+        "solve-multi",
+        help="Jointly solve one K from multiple compatible sessions",
+    )
+    solve_multi.add_argument("sessions", nargs="+")
+    solve_multi.add_argument("--output", required=True)
+    solve_multi.add_argument("--min-views", type=int, default=40)
+    solve_multi.add_argument("--min-views-per-session", type=int, default=12)
+    solve_multi.add_argument("--max-views-per-session", type=int, default=24)
+    solve_multi.add_argument("--max-view-error", type=float, default=0.8)
+    solve_multi.add_argument("--cross-validation-folds", type=int, default=5)
     return parser
 
 

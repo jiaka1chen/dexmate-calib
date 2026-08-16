@@ -5,10 +5,12 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 import yaml
 
 from dexmate_calib.boards.config import resolve_board_profile
 from dexmate_calib.intrinsics.detector import CharucoDetector
+from dexmate_calib.intrinsics.multi_solve import solve_sessions
 from dexmate_calib.intrinsics.solve import (
     _load_observations,
     calibrate_observations,
@@ -17,7 +19,7 @@ from dexmate_calib.intrinsics.solve import (
 from dexmate_calib.intrinsics.validation import camera_matrix_difference
 
 
-def _make_rectified_session(session_dir: Path, views: int = 18) -> None:
+def _make_rectified_session(session_dir: Path, views: int = 18, seed: int = 11) -> None:
     profile = resolve_board_profile("dexmate-10x7")
     board, _ = profile.create_opencv_board()
     board_image = board.generateImage((1000, 700), marginSize=0, borderBits=1)
@@ -35,7 +37,7 @@ def _make_rectified_session(session_dir: Path, views: int = 18) -> None:
     )
     raw_dir = session_dir / "raw"
     raw_dir.mkdir(parents=True)
-    rng = np.random.default_rng(11)
+    rng = np.random.default_rng(seed)
     records: list[dict] = []
     for index in range(views):
         rvec = rng.uniform([-0.35, -0.35, -0.25], [0.35, 0.35, 0.25]).astype(np.float64)
@@ -138,3 +140,66 @@ def test_session_solver_preserves_dexmate_contract_and_writes_diagnostics(
         "reprojection_contact_sheet.jpg",
     ):
         assert (results_dir / name).is_file()
+
+
+def test_multi_session_solver_jointly_fits_one_camera_matrix(tmp_path: Path) -> None:
+    sessions = [tmp_path / f"session_{index}" for index in range(3)]
+    for index, session in enumerate(sessions):
+        _make_rectified_session(session, views=14, seed=21 + index)
+
+    output = tmp_path / "pooled"
+    result_path = solve_sessions(
+        sessions,
+        output=output,
+        min_views=24,
+        min_views_per_session=8,
+        max_views_per_session=10,
+        cross_validation_folds=3,
+    )
+    result = yaml.safe_load(result_path.read_text(encoding="utf-8"))
+    assert result["schema"] == "dexmate_calib.intrinsics_multi.v1"
+    assert result["sources"]["session_count"] == 3
+    assert result["model"]["distortion_coefficients"] == [0.0] * 5
+    recovered_k = np.asarray(result["model"]["K"], dtype=np.float64)
+    np.testing.assert_allclose(recovered_k[0, 0], 738.0, rtol=0.005)
+    np.testing.assert_allclose(recovered_k[1, 1], 739.0, rtol=0.005)
+    np.testing.assert_allclose(recovered_k[:2, 2], [959.0, 601.0], atol=2.0)
+    assert result["quality"]["views_used"] >= 24
+    assert result["quality"]["leave_one_session_out"]["fold_count"] == 3
+    assert result["quality"]["leave_one_session_out_median_error_px"] < 0.5
+    assert set(result["quality"]["views_used_by_session"]) == {
+        "session_0",
+        "session_1",
+        "session_2",
+    }
+    results_dir = output / "results"
+    for name in (
+        "K.npy",
+        "sample_selection.csv",
+        "cross_validation.json",
+        "leave_one_session_out.json",
+        "quality_summary.json",
+        "capture_contact_sheet.jpg",
+        "reprojection_contact_sheet.jpg",
+    ):
+        assert (results_dir / name).is_file()
+
+
+def test_multi_session_solver_rejects_incompatible_camera_contract(tmp_path: Path) -> None:
+    session_a = tmp_path / "session_a"
+    session_b = tmp_path / "session_b"
+    _make_rectified_session(session_a, views=3)
+    _make_rectified_session(session_b, views=3, seed=12)
+    manifest_path = session_b / "manifest.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["camera"]["camera_serial"] = 12345678
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Incompatible session"):
+        solve_sessions(
+            [session_a, session_b],
+            output=tmp_path / "pooled",
+            min_views=6,
+            min_views_per_session=3,
+            max_views_per_session=3,
+        )
