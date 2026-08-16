@@ -5,7 +5,8 @@ Dexmate 相机标定工具。当前实现聚焦头部 ZED X Mini 左目内参，
 
 推荐使用 `intrinsics quickstart`：本机通过公钥 SSH 保持一个 Nano 会话，在该会话中
 启动固定参数 streamer，验证 stream 后进入采集，并在采集结束或异常时关闭这次会话和
-streamer。它不会在 Nano 安装 service，不写 sudoers，不使用 `--clean`。
+streamer；正常完成采集后默认离线求解新 session。它不会在 Nano 安装 service，不写
+sudoers，不使用 `--clean`。
 
 ## Quick start
 
@@ -20,6 +21,9 @@ dexcalib intrinsics quickstart \
   --board dexmate-10x7 \
   --samples 40
 ```
+
+采集完成后默认停止本次启动的 streamer，再求解刚创建的 session。仅做少量 smoke test
+或只想保留原始数据时显式添加 `--no-solve`。
 
 默认情况下 SSH 登录本身免密，但 Nano 上的 `sudo` 可能在当前终端提示一次密码。密码不
 经过 Python、不保存；同一 SSH 会话持续到采集结束，所以停止 streamer 不需要再次认证。
@@ -104,6 +108,7 @@ dexcalib intrinsics quickstart --board dexmate-10x7 --samples 40
 3. 强制验证 ZS protocol、serial `59595115`、1920×1200、timestamp 和 JPEG decode。
 4. 进入 ChArUco 采集。
 5. 仅当 streamer 是本次 quickstart 启动的，采集结束或异常后才关闭它。
+6. 默认在本机求解刚创建的 session；`--no-solve` 可停在采集结束。
 
 若端口开始时已经有 streamer，quickstart 会验证并复用，但不会在结束时停止别人的进程。
 如果 Nano 已配置当前用户直接访问相机，可以加 `--no-sudo`。默认不使用 `--clean`，不会
@@ -148,6 +153,9 @@ dexcalib intrinsics capture \
   --output calibration_data/head_left
 ```
 
+独立的 `intrinsics capture` 只采集，不自动求解；一站式 `intrinsics quickstart` 默认在
+采集后求解。
+
 默认自动采集，按 `q` 或 `Esc` 提前结束。使用 `--manual` 后按空格保存符合质量门限的
 画面。每个 session 锁定：
 
@@ -177,7 +185,8 @@ board bbox、清晰度、pixels-per-square、冷却和重复视角状态。质�
 
 ## 求解
 
-采集可在断开机器人后离线求解：
+`intrinsics quickstart` 默认已自动求解。使用 `--no-solve`、独立 `intrinsics capture`
+或需要用其他求解参数重新计算时，可在断开机器人后运行：
 
 ```bash
 dexcalib intrinsics solve \

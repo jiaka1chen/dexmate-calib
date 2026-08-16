@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import signal
 import subprocess
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
+import dexmate_calib.cli as cli_module
 from dexmate_calib.cli import _cmd_intrinsics, build_parser
 from dexmate_calib.remote.streamer import RemoteStreamerManager, SSHRoute
 
@@ -94,6 +97,53 @@ def test_quickstart_cli_defaults_to_safe_fixed_profile() -> None:
     assert args.min_grid_cols == 3
     assert args.min_board_bbox_fraction == 0.12
     assert args.detect_fps == 10.0
+    assert args.no_solve is False
+
+
+def _mock_quickstart_dependencies(monkeypatch, events: list[str]) -> Mock:
+    manager = Mock()
+    manager.process = object()
+    manager.ensure_started.return_value = True
+    manager.select_route.return_value = SimpleNamespace(name="direct")
+    manager.stop_attached.side_effect = lambda **_kwargs: events.append("stop")
+
+    monkeypatch.setattr(cli_module, "RemoteStreamerManager", Mock(return_value=manager))
+    monkeypatch.setattr(cli_module, "resolve_board_profile", Mock(return_value=object()))
+    monkeypatch.setattr(cli_module, "ZedStreamClient", Mock(return_value=object()))
+    monkeypatch.setattr(cli_module, "doctor_stream", Mock(return_value={}))
+    monkeypatch.setattr(cli_module, "print_report", Mock())
+    monkeypatch.setattr(
+        cli_module,
+        "capture_session",
+        Mock(side_effect=lambda *_args, **_kwargs: events.append("capture") or Path("session")),
+    )
+    return manager
+
+
+def test_quickstart_solves_by_default_after_stopping_streamer(monkeypatch) -> None:
+    events: list[str] = []
+    _mock_quickstart_dependencies(monkeypatch, events)
+    solve = Mock(side_effect=lambda *_args, **_kwargs: events.append("solve") or Path("result"))
+    monkeypatch.setattr(cli_module, "solve_session", solve)
+
+    args = build_parser().parse_args(["intrinsics", "quickstart"])
+    assert _cmd_intrinsics(args) == 0
+
+    solve.assert_called_once_with(Path("session"))
+    assert events == ["capture", "stop", "solve"]
+
+
+def test_quickstart_no_solve_stops_after_capture(monkeypatch) -> None:
+    events: list[str] = []
+    _mock_quickstart_dependencies(monkeypatch, events)
+    solve = Mock()
+    monkeypatch.setattr(cli_module, "solve_session", solve)
+
+    args = build_parser().parse_args(["intrinsics", "quickstart", "--no-solve"])
+    assert _cmd_intrinsics(args) == 0
+
+    solve.assert_not_called()
+    assert events == ["capture", "stop"]
 
 
 def test_manual_capture_requires_preview() -> None:

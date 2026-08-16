@@ -145,6 +145,9 @@ def _cmd_intrinsics(args: argparse.Namespace) -> int:
             if manager.process is not None:
                 manager.stop_attached(host=args.host, port=args.port)
         print(session)
+        if not args.no_solve:
+            result = solve_session(session)
+            print(result)
         return 0
     result = solve_session(
         args.session,
@@ -188,7 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture = intrinsics_sub.add_parser("capture")
     _add_capture_arguments(capture)
     quickstart = intrinsics_sub.add_parser(
-        "quickstart", help="SSH-start streamer, validate it, capture, then stop it"
+        "quickstart", help="SSH-start streamer, validate, capture, stop, then solve"
     )
     _add_capture_arguments(quickstart)
     quickstart.add_argument(
@@ -203,6 +206,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     quickstart.add_argument("--startup-timeout", type=float, default=30.0)
     quickstart.add_argument("--preflight-frames", type=int, default=10)
+    quickstart.add_argument(
+        "--no-solve",
+        action="store_true",
+        help="Stop after capture instead of solving the new session",
+    )
     solve = intrinsics_sub.add_parser("solve")
     solve.add_argument("session")
     solve.add_argument("--min-views", type=int, default=20)

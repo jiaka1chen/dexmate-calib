@@ -163,7 +163,7 @@ dexcalib board verify --board dexmate-10x7 --image /path/to/board_photo.jpg
 
 完整正视照片应达到 35 markers、54 corners；采集中的倾斜视图不要求每帧全部可见。
 
-## 4. 一条命令启动、验证、采集和停止
+## 4. 一条命令启动、验证、采集、停止和求解
 
 ```bash
 dexcalib intrinsics quickstart \
@@ -190,7 +190,27 @@ sudo /home/dexmate-nano/zed_stream/build/zed_streamer \
 
 quickstart 保持该 SSH session 和远端前台 streamer 直到采集结束。按 `q`/`Esc`、正常采满
 或采集抛出异常时，`finally` 都会关闭本次 SSH session，从而停止本次 streamer。它不会
-停止启动前就已经监听 30000 的现有 streamer。
+停止启动前就已经监听 30000 的现有 streamer。streamer 清理完成后，quickstart 默认在
+本机求解刚创建的 session，并把结果写入该 session 的 `results/`。
+
+仅采集、不自动求解：
+
+```bash
+dexcalib intrinsics quickstart \
+  --no-solve \
+  --board dexmate-10x7 \
+  --samples 40
+```
+
+少量生命周期 smoke test 通常不足默认的 20-view 求解门限，必须使用 `--no-solve`，例如：
+
+```bash
+dexcalib intrinsics quickstart \
+  --no-solve \
+  --manual \
+  --board dexmate-10x7 \
+  --samples 5
+```
 
 如果 `dexmate-nano` 用户本身有相机访问权限：
 
@@ -235,9 +255,10 @@ quickstart 不会通过 `--clean` 自动解决相机占用，因为那可能终�
 
 目标约 40 张；有效结果建议不少于 25 张。原始 JPEG 和 partial manifest 会实时落盘。
 
-## 7. 离线求解
+## 7. 自动与离线求解
 
-机器人可以断开后再运行：
+正式 quickstart 采满后会自动执行下面的求解。若此前使用 `--no-solve`、独立 capture，或
+需要重新求解，机器人可以断开后再运行：
 
 ```bash
 dexcalib intrinsics solve calibration_data/head_left/<session-name>
