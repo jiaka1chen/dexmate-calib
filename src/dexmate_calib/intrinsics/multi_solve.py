@@ -225,7 +225,7 @@ def solve_sessions(
     max_view_error_px: float = 0.8,
     min_views: int = 40,
     min_views_per_session: int = 12,
-    max_views_per_session: int = 24,
+    max_views_per_session: int = 40,
     cross_validation_folds: int = 5,
 ) -> Path:
     if min_views < 3:

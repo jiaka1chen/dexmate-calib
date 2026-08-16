@@ -237,7 +237,7 @@ def build_parser() -> argparse.ArgumentParser:
     solve_multi.add_argument("--output", required=True)
     solve_multi.add_argument("--min-views", type=int, default=40)
     solve_multi.add_argument("--min-views-per-session", type=int, default=12)
-    solve_multi.add_argument("--max-views-per-session", type=int, default=24)
+    solve_multi.add_argument("--max-views-per-session", type=int, default=40)
     solve_multi.add_argument("--max-view-error", type=float, default=0.8)
     solve_multi.add_argument("--cross-validation-folds", type=int, default=5)
     return parser
