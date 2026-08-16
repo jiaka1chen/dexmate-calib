@@ -39,7 +39,7 @@ distortion_coefficients: [0.0, 0.0, 0.0, 0.0, 0.0]
 
 ### `dexmate-calib` 自标定建议参数
 
-如果应用明确要求使用本项目实测值，建议采用下面这套多 session 平均参数：
+如果应用明确要求使用本项目实测值，建议采用下面这套 5-session pooled 参数：
 
 ```yaml
 camera_serial: 59595115
@@ -47,25 +47,27 @@ resolution: [1920, 1200]
 zed_mode: HD1200
 view: LEFT
 image_geometry: rectified
-source: dexmate-calib mean of 5 accepted sessions
+source: dexmate-calib pooled joint solve of 5 accepted sessions, 193 views
 K:
-  - [747.5652, 0.0, 960.0527]
-  - [0.0, 748.4718, 584.9647]
+  - [747.6196, 0.0, 959.6954]
+  - [0.0, 748.7749, 584.7266]
   - [0.0, 0.0, 1.0]
 distortion_coefficients: [0.0, 0.0, 0.0, 0.0, 0.0]
 ```
 
-它是 5 个独立、全部通过质量门的 session 的逐参数平均值，不是把所有图片合并后重新做的
-一次联合求解。它适合作为当前自标定建议值和 factory 的独立交叉检查；若要固化为严格的
-生产标定，应再做平衡视图的 pooled solve 和独立验证集验证。
+它把 5 个独立、全部通过质量门的 session 中 198 个清晰候选视图放进同一次联合拟合，所有
+图片共享一个 K，每张图片仍有独立的 board pose。稳健拟合剔除 5 张重投影离群图，最终使用
+193 张。它不是 5 个 K 的平均值。
 
-5 个 session 的样本标准差为：`fx 0.9186 px`、`fy 0.8706 px`、`cx 0.8810 px`、
-`cy 1.0722 px`。自标定均值相对 factory 的差值为：
+Pooled K 相对 factory 的差值为：
 
-- `fx`: `+0.5961 px`（`+0.0798%`）
-- `fy`: `+1.5026 px`（`+0.2012%`）
-- `cx`: `+0.0623 px`
-- `cy`: `-0.5267 px`
+- `fx`: `+0.6505 px`（`+0.0871%`）
+- `fy`: `+1.8058 px`（`+0.2418%`）
+- `cx`: `-0.2950 px`
+- `cy`: `-0.7648 px`
+
+Factory rectified K 仍是与 ZED SDK rectification/depth pipeline 完全一致的默认生产基准；
+上面的 pooled K 是当前最可信的 `dexmate-calib` 自标定建议值和独立交叉检查。
 
 ## 标定原理和边界
 
@@ -186,9 +188,26 @@ dexcalib intrinsics solve \
   calibration_data/head_left/<session-name>
 ```
 
+多个兼容 session 可以共同求解一个 K。当前建议结果的复现命令是：
+
+```bash
+dexcalib intrinsics solve-multi \
+  calibration_data/head_left/20260816_004853_head_left_HD1200 \
+  calibration_data/head_left/20260816_012412_head_left_HD1200 \
+  calibration_data/head_left/20260816_044219_head_left_HD1200 \
+  calibration_data/head_left/20260816_044425_head_left_HD1200 \
+  calibration_data/head_left/20260816_044602_head_left_HD1200 \
+  --output calibration_data/head_left/pooled_20260816_5_sessions_all_views
+```
+
+`solve-multi` 会先确认所有 session 的 serial、HD mode、分辨率、view、image geometry 和
+board profile hash 完全一致。每个 session 独立做模糊筛选和姿态多样性选择，然后共同求解
+一个 K。默认每个 session 最多使用 40 张，可用 `--max-views-per-session` 降低上限。
+
 ### 6. 结果检查
 
-重点检查 session 的 `results/intrinsics_head_left_HD1200_1920x1200.json`：
+单 session 重点检查 `results/intrinsics_head_left_HD1200_1920x1200.json`；pooled 输出对应
+`results/intrinsics_head_left_HD1200_1920x1200_pooled.json`。两者都要检查：
 
 - `quality.all_gates_pass` 必须为 `true`
 - 求解至少需要 20 个有效 views；`enough_views` 质量门要求 `views_used >= 25`
@@ -202,11 +221,52 @@ dexcalib intrinsics solve \
 - `capture_contact_sheet.jpg`：采集覆盖情况
 - `reprojection_contact_sheet.jpg`：检测角点和模型重投影的可视比较
 - `cross_validation.json`：K-fold held-out 误差和 K 稳定性
+- `leave_one_session_out.json`：每次完整留出一个 session 的泛化误差和 K 稳定性
 
 ## 当前 `dexmate-calib` 实测记录
 
 下表只保留 5 个全部通过质量门、且纳入当前统计的 session。失败的 session 和早期跨 session
 离群结果没有进入表格或建议值，但原始数据仍保留在本机，没有删除。
+
+### 5-session pooled joint solve
+
+最终推荐使用 all-view pooled 结果：
+
+| 指标 | 结果 |
+|---|---:|
+| 清晰候选视图 | 198 |
+| 最终使用视图 | 193 |
+| RMS reprojection error | 0.2856 px |
+| K-fold held-out median / P90 / max | 0.2526 / 0.4012 / 0.4823 px |
+| Leave-one-session-out median / P90 / max | 0.2567 / 0.4008 / 0.4836 px |
+| Split principal-point difference | 0.3865 px |
+| LOSO fx / fy range | 0.4865 / 0.1789 px |
+| LOSO principal-point span | 0.7686 px |
+| `all_gates_pass` | `true` |
+
+各 session 对 pooled fit 的贡献为：
+
+| Session | 清晰候选 | 最终使用 |
+|---|---:|---:|
+| `20260816_004853_head_left_HD1200` | 40 | 40 |
+| `20260816_012412_head_left_HD1200` | 39 | 38 |
+| `20260816_044219_head_left_HD1200` | 40 | 38 |
+| `20260816_044425_head_left_HD1200` | 40 | 39 |
+| `20260816_044602_head_left_HD1200` | 39 | 38 |
+| **Total** | **198** | **193** |
+
+输出位于：
+
+```text
+calibration_data/head_left/pooled_20260816_5_sessions_all_views/results/
+```
+
+额外做了每 session 最多 24 张的 balanced-120 敏感性检查。该版本最终使用 117 张，得到
+`fx=747.5837, fy=748.6506, cx=959.7985, cy=584.6397`；与 all-view pooled K 的最大单参数
+差值只有 `0.1243 px`，且全部质量门同样通过。这说明 pooled 结果对当前选样上限不敏感，
+文档仍采用数据更多、验证误差略低的 all-view 结果。
+
+### 各 session 独立求解记录
 
 | Session | Views used | fx | fy | cx | cy | RMS (px) | Held-out median (px) | Held-out P90 (px) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -219,7 +279,9 @@ dexcalib intrinsics solve \
 | **sample std** | — | **0.9186** | **0.8706** | **0.8810** | **1.0722** | — | — | — |
 
 所有表内 session 都使用同一 camera serial、HD1200、1920×1200、rectified `LEFT`、
-`dexmate-10x7` board profile 和 zero-distortion 求解。
+`dexmate-10x7` board profile 和 zero-distortion 求解。表中的 5-session mean 仅保留用于比较，
+不再作为建议参数；pooled K 相对这个旧均值的 `[fx, fy, cx, cy]` 差值为
+`[+0.0544, +0.3032, -0.3573, -0.2381] px`。
 
 ## Factory 参数的获取来源
 

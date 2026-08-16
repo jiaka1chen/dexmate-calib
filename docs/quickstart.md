@@ -264,6 +264,19 @@ quickstart 不会通过 `--clean` 自动解决相机占用，因为那可能终�
 dexcalib intrinsics solve calibration_data/head_left/<session-name>
 ```
 
+需要把多个独立 session 联合求解为一个共同 K 时使用：
+
+```bash
+dexcalib intrinsics solve-multi \
+  calibration_data/head_left/<session-1> \
+  calibration_data/head_left/<session-2> \
+  --output calibration_data/head_left/<pooled-session-name>
+```
+
+该命令会拒绝 camera serial、分辨率、图像几何或 board hash 不一致的输入，并额外输出
+`leave_one_session_out.json`。完整的当前 5-session 命令和结果见
+[head_left_intrinsics.md](head_left_intrinsics.md)。
+
 检查 `results/` 中的 `all_gates_pass`、RMS、held-out error 和 split stability。任何 gate 失败
 都应优先补采视图或检查板/成像，而不是直接降低阈值。
 
