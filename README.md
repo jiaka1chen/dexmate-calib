@@ -28,6 +28,9 @@ dexcalib intrinsics quickstart \
 默认情况下 SSH 登录本身免密，但 Nano 上的 `sudo` 可能在当前终端提示一次密码。密码不
 经过 Python、不保存；同一 SSH 会话持续到采集结束，所以停止 streamer 不需要再次认证。
 
+当前 factory 参数、5 个合格实测 session、`dexmate-calib` 自标定建议参数以及完整结果检查
+方法，统一记录在 [docs/head_left_intrinsics.md](docs/head_left_intrinsics.md)。
+
 ## 已锁定的硬件和标定板
 
 - Camera Jetson: `192.168.50.22`, TCP stream port `30000`
@@ -39,6 +42,29 @@ dexcalib intrinsics quickstart \
 - Board physical size: 270×189 mm; 100 mm check 已实测
 
 配置都在 `configs/`，不会在求解代码中静默猜测或交换板的 X/Y。
+
+## 当前参数基准
+
+当前 streamer 输出是 ZED SDK rectified `LEFT`。默认生产基准为当前 serial 在 HD1200 下的
+SDK factory rectified 参数：
+
+```text
+fx = 746.9691   fy = 746.9691
+cx = 959.9904   cy = 585.4913
+D  = [0, 0, 0, 0, 0]
+```
+
+筛选 5 个通过质量门的独立 `dexmate-calib` session 后，当前自标定建议值为：
+
+```text
+fx = 747.5652   fy = 748.4718
+cx = 960.0527   cy = 584.9647
+D  = [0, 0, 0, 0, 0]
+```
+
+自标定建议值是多 session 的逐参数平均值；来源、离散度、每次结果及适用边界见
+[头部左相机内参记录](docs/head_left_intrinsics.md)。两套参数都只适用于 serial `59595115`、
+HD1200、1920×1200、rectified `LEFT`，不能与 raw/HD1080/crop 后的图像混用。
 
 ## 方法来源与 Dexmate 约束
 

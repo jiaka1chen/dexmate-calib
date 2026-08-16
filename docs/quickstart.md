@@ -273,3 +273,6 @@ dexcalib intrinsics solve calibration_data/head_left/<session-name>
 - `capture_contact_sheet.jpg`：采集视图覆盖概览。
 - `reprojection_contact_sheet.jpg`：检测角点与重投影位置的可视比较。
 - `cross_validation.json`：确定性 K-fold held-out 误差和各 fold 的 K 稳定性。
+
+当前 ZED SDK factory rectified 参数、筛选后的多 session 实测表、自标定建议参数以及参数的
+适用边界见 [head_left_intrinsics.md](head_left_intrinsics.md)。
