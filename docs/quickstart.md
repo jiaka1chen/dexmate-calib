@@ -237,7 +237,7 @@ dexcalib intrinsics quickstart --ssh-route proxy
 - frame 缺少 left JPEG、协议损坏或 timestamp 异常。
 
 quickstart 不会通过 `--clean` 自动解决相机占用，因为那可能终止别人的实验。确认安全后，
-可手动 SSH 到 Nano 排查并启动；见主 README 的 manual fallback。
+可手动 SSH 到 Nano 排查并启动；见 [intrinsics.md](intrinsics.md) 的 manual fallback。
 
 ## 6. 采集动作
 
