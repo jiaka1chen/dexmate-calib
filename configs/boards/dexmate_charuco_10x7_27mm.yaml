@@ -1,6 +1,6 @@
 schema_version: 1
 name: dexmate_charuco_10x7_27mm
-aliases: [dexmate-10x7]
+aliases: [charuco-10x7-27mm, dexmate-10x7]
 target_type: charuco
 geometry:
   squares_x: 10

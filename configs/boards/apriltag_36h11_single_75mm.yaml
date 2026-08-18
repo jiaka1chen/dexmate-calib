@@ -4,7 +4,7 @@
 # scales with it.
 schema_version: 1
 name: apriltag_36h11_single_75mm
-aliases: [single-tag-75, single-tag]
+aliases: [apriltag-1x1-75mm, single-tag-75, single-tag]
 target_type: apriltag_grid
 apriltag:
   family: tag36h11

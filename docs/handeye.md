@@ -30,11 +30,14 @@
 求解器只消费"板坐标系 3D 点 ↔ 图像 2D 点"，目标类型由 `configs/boards/*.yaml` 的
 `target_type` 决定（`dexcalib board list` 列出全部）：
 
-| profile | 类型 | 角点/视图 | 说明 |
+| `--board` 名称 | 类型 | 角点/视图 | 说明 |
 |---|---|---|---|
-| `dexmate-10x7` | `charuco` | 54 | 默认；精度最好，实物已实测 |
-| `apriltag-4x4`（`robotcamcalib-4x4`） | `apriltag_grid` | 64 | 与 RobotCamCalib `compact_apriltag_grid_4x4_tag48mm` 同规格：tag36h11 id 0–15、48 mm、间距 52.17 mm |
-| `single-tag-75` | `apriltag_grid` 1×1 | 4 | 单个 75 mm tag；精度受限，见下 |
+| `charuco-10x7-27mm`（默认，别名 `dexmate-10x7`） | `charuco` | 54 | 27 mm 方格 / 20.25 mm marker；精度最好，实物已实测 |
+| `apriltag-4x4-37.5mm` | `apriltag_grid` | 64 | tag36h11 id 0–15，marker 边 37.5 mm，间距 ≈40.8 mm（RobotCamCalib 板的缩印版） |
+| `apriltag-4x4-48mm` | `apriltag_grid` | 64 | RobotCamCalib 原版 `compact_apriltag_grid_4x4_tag48mm`，间距 52.17 mm |
+| `apriltag-1x1-75mm` | `apriltag_grid` 1×1 | 4 | 单个 tag36h11 id 7，边 75 mm；精度受限，见下 |
+
+命名规则：`<类型>-<行×列>-<边长>`；ChArUco 的边长是方格边长，AprilTag 的是黑框外缘边长。
 
 AprilTag profile 字段：`apriltag.family`（`tag36h11`/`tag36h10`/`tag25h9`/`tag16h5`）、
 `layout.rows/cols/tag_id_start/tag_size_m/pitch_m`，或显式 `tags: [{id, center_m, size_m}]`
@@ -46,9 +49,9 @@ z 指向纸面内；每个 tag 角点按 OpenCV 顺序 TL、TR、BR、BL。检�
 
 ```bash
 dexcalib board identify --image photo.png        # 扫描全部 ArUco/AprilTag 字典，识别未知 tag 的家族与 id
-dexcalib board render --board apriltag-4x4 --output grid.png --dpi 300   # 生成可打印 PNG（100% 打印后量尺寸）
-dexcalib board verify --board single-tag-75 --image photo.png            # 用配置检测一张实拍图
-dexcalib extrinsics capture --board single-tag-75 ...                    # 采集时指定目标
+dexcalib board render --board apriltag-4x4-48mm --output grid.png --dpi 300   # 生成可打印 PNG（100% 打印后量尺寸）
+dexcalib board verify --board apriltag-1x1-75mm --image photo.png            # 用配置检测一张实拍图
+dexcalib extrinsics capture --board apriltag-1x1-75mm ...                    # 采集时指定目标
 ```
 
 采集/求解的质量门会自动按目标能力收紧（单 tag：最少 4 角点、1×1 网格）。

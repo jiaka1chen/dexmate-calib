@@ -4,7 +4,7 @@
 # if it differs, edit pitch_m — a wrong pitch shows up as large per-view PnP residuals.
 schema_version: 1
 name: apriltag_36h11_4x4_37p5mm
-aliases: [apriltag-4x4-37p5, my-4x4]
+aliases: [apriltag-4x4-37.5mm, my-4x4]
 target_type: apriltag_grid
 apriltag:
   family: tag36h11
