@@ -51,6 +51,11 @@ class CharucoDetector:
         self.profile = profile
         self.board, self.dictionary = profile.create_opencv_board()
         detector_params = cv2.aruco.DetectorParameters()
+        # OpenCV's default minMarkerPerimeterRate (0.03 of the longest image side) discards
+        # markers smaller than ~15 px at 1920-2048 px width, i.e. the 20 mm markers of the
+        # dexmate-10x7 board beyond ~1.1 m. 0.01 keeps the board detectable to ~1.6 m at no
+        # measurable speed cost.
+        detector_params.minMarkerPerimeterRate = 0.01
         if hasattr(cv2.aruco, "CharucoParameters"):
             charuco_params = cv2.aruco.CharucoParameters()
             self.detector = cv2.aruco.CharucoDetector(self.board, charuco_params, detector_params)
