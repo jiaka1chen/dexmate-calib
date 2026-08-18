@@ -89,6 +89,19 @@ T_base_link_i · Y = X · T_cam_board_i        （AX = YB 形式）
    留出样本的重投影误差。
 6. 额外报告运动多样性：link 位姿的最大两两旋转角、旋转轴秩（应为 3）、平移跨度。
 
+### 备选求解方法：`--method pose`（RobotCamCalib 同款）
+
+`dexcalib extrinsics solve <session> --method pose` 使用与 `RobotCamCalib/extr_calib.py`
+相同的算法：交替最小二乘（Wahba/SVD）初值 + 位姿残差 `se3_log(Y⁻¹·A⁻¹·X·B)` 的
+Gauss-Newton/Levenberg，旋转/平移各自 Huber（3° / 10 mm）与 σ 加权。区别只有两点：
+交替初值迭代到收敛（原版 1.5 轮）、加了步长接受判断（原版无条件接受每一步）。
+它把每帧 PnP 位姿当观测，因此 PnP 噪声会进入结果：合成对照里大板上两者相当（有 FK 噪声时
+位姿法平移略好，因为它显式按 σ 加权），单 tag 上位姿法明显差（约 5 mm vs 0.4 mm）。
+
+`--compare` 会同时跑另一种方法并打印两者 `T_base_cam` 的差异；`pose` 结果写入
+`results/handeye_result_pose.json`，默认方法的结果文件名不变。默认值在 `configs/handeye.yaml`
+的 `solve.method`。
+
 `dexcalib extrinsics selftest` 用合成场景验证整条链路：0.4 px 像素噪声 + 0.03°/0.5 mm
 FK 噪声、25 视图时，`T_base_cam` 误差约 0.05° / 1 mm；注入的离群视图会被识别并剔除。
 

@@ -290,8 +290,40 @@ def _cmd_extrinsics(args: argparse.Namespace) -> int:
             if args.max_view_rms is not None
             else float(solve_cfg["max_view_rms_px"]),
             leave_one_out=not args.no_leave_one_out and bool(solve_cfg.get("leave_one_out", True)),
+            method=args.method or str(solve_cfg.get("method", "reprojection")),
         )
         print(result)
+        if args.compare:
+            from dexmate_calib.geometry.transforms import pose_error
+
+            primary = result.solution.refinement.get("method", "reprojection")
+            other_method = "pose" if primary == "reprojection" else "reprojection"
+            other = solve_handeye_session(
+                args.session,
+                robot_model=args.robot_model,
+                base_frame=args.base_frame,
+                target_link=args.target_link,
+                min_corners=args.min_corners
+                if args.min_corners is not None
+                else int(solve_cfg["min_corners"]),
+                min_views=args.min_views
+                if args.min_views is not None
+                else int(solve_cfg["min_views"]),
+                huber_px=args.huber if args.huber is not None else float(solve_cfg["huber_px"]),
+                max_view_rms_px=args.max_view_rms
+                if args.max_view_rms is not None
+                else float(solve_cfg["max_view_rms_px"]),
+                leave_one_out=not args.no_leave_one_out
+                and bool(solve_cfg.get("leave_one_out", True)),
+                method=other_method,
+            )
+            print("\n--- comparison ---")
+            print(other)
+            rot_deg, trans_m = pose_error(result.solution.T_base_cam, other.solution.T_base_cam)
+            print(
+                f"\nT_base_cam difference ({primary} vs {other_method}): "
+                f"{rot_deg:.4f} deg, {trans_m * 1000:.2f} mm"
+            )
         return 0
     if args.extrinsics_command == "capture":
         from dexmate_calib.cameras.kinect import KinectCamera
@@ -553,6 +585,17 @@ def build_parser() -> argparse.ArgumentParser:
     ex_solve.add_argument("--huber", type=float, default=None)
     ex_solve.add_argument("--max-view-rms", type=float, default=None)
     ex_solve.add_argument("--no-leave-one-out", action="store_true")
+    ex_solve.add_argument(
+        "--method",
+        choices=("reprojection", "pose"),
+        default=None,
+        help="reprojection (default): corner reprojection LM; pose: RobotCamCalib-style pose-residual GN",
+    )
+    ex_solve.add_argument(
+        "--compare",
+        action="store_true",
+        help="Also solve with the other method and print the difference",
+    )
     ex_self = extrinsics_sub.add_parser("selftest", help="Run the solver on a synthetic scene")
     ex_self.add_argument("--views", type=int, default=25)
     ex_self.add_argument("--pixel-noise", type=float, default=0.4)

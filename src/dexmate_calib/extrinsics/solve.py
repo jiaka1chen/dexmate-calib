@@ -42,6 +42,7 @@ class HandEyeSessionResult:
             f"robot: {self.robot_model}  base={self.base_frame}  link={self.target_link}",
             f"camera: {self.camera_serial}",
             f"views: {len(self.solution.inlier_views)} used, {len(self.solution.rejected_views)} rejected",
+            f"method: {self.solution.refinement.get('method', 'reprojection')}",
             f"rms reprojection error: {self.solution.rms_px:.4f} px",
             f"init ({self.solution.initialisation['method']}): {self.solution.initialisation['rms_px']:.3f} px",
             "T_base_cam (color camera in robot base, metres):",
@@ -211,6 +212,7 @@ def solve_handeye_session(
     max_view_rms_px: float = 3.0,
     leave_one_out: bool = True,
     kinematics=None,
+    method: str = "reprojection",
 ) -> HandEyeSessionResult:
     """Solve ``T_base_cam`` for a captured session and write ``results/``.
 
@@ -247,6 +249,7 @@ def solve_handeye_session(
         max_view_rms_px=max_view_rms_px,
         min_views=min_views,
         leave_one_out=leave_one_out,
+        method=method,
     )
     solution.rejected_views = rejected_pre + solution.rejected_views
 
@@ -267,6 +270,7 @@ def solve_handeye_session(
         "schema": "dexmate_calib.handeye_result.v1",
         "solved_at_utc": solved_at,
         "calibration_type": "eye_to_hand",
+        "method": method,
         "robot": {"model": robot_model, "base_frame": base_frame, "target_link": target_link},
         "camera": {
             "name": manifest["camera"].get("name"),
@@ -292,7 +296,8 @@ def solve_handeye_session(
         "diagnostics": solution.diagnostics,
         "rejected_views": solution.rejected_views,
     }
-    (results_dir / "handeye_result.json").write_text(
+    suffix = "" if method == "reprojection" else f"_{method}"
+    (results_dir / f"handeye_result{suffix}.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8"
     )
     yaml_out = {
@@ -307,6 +312,7 @@ def solve_handeye_session(
         "T_base_depth": None if T_base_depth is None else T_base_depth.tolist(),
         "rms_reprojection_error_px": round(solution.rms_px, 5),
         "views_used": len(solution.inlier_views),
+        "method": method,
         "solved_at_utc": solved_at,
     }
     (results_dir / f"T_base_{manifest['camera'].get('name', 'cam')}.yaml").write_text(

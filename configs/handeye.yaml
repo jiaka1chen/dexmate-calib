@@ -31,6 +31,7 @@ capture:
   settle_tolerance_rad: 0.002
   teleop_settle_s: 1.0        # --teleop: minimum time after the last motion command before SPACE saves
 solve:
+  method: reprojection   # reprojection (default) | pose (RobotCamCalib-style pose-residual GN)
   min_views: 8
   min_corners: 12
   huber_px: 2.0

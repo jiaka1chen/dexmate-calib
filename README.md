@@ -273,7 +273,7 @@ dexcalib extrinsics solve calibration_data/handeye_kinect/<session>
 `configs/boards/apriltag_*.yaml`）。求解 `T_base_link_i · Y = X · T_cam_board_i` 中的 `X = T_base_cam`
 与 `Y = T_link_board`：
 PnP → Kronecker 闭式初值 → SE(3) 上以重投影误差做 LM refine（Huber）→ 逐视图剔除 →
-leave-one-out。结果、判定标准、session 与 `results/` 格式见 [docs/handeye.md](docs/handeye.md)。
+leave-one-out；`--method pose` 提供 RobotCamCalib 同款的位姿残差求解作为对照（`--compare` 同时跑两种）。结果、判定标准、session 与 `results/` 格式见 [docs/handeye.md](docs/handeye.md)。
 所有锁定参数在 `configs/handeye.yaml`。
 
 ## 测试

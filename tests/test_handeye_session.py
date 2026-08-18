@@ -189,4 +189,17 @@ def test_capture_and_solve_synthetic_session(tmp_path: Path, board_alias, target
     saved = yaml.safe_load((result.results_dir / "T_base_kinect_external.yaml").read_text())
     assert np.allclose(np.array(saved["T_base_cam"]), result.solution.T_base_cam)
     assert saved["views_used"] == len(result.solution.inlier_views)
+    assert saved["method"] == "reprojection"
+    # The RobotCamCalib-style solver runs on the same session and lands close by.
+    alt = solve_handeye_session(
+        session_dir,
+        kinematics=FakeKinematics(poses),
+        target_link="L_ee",
+        min_views=8,
+        leave_one_out=False,
+        method="pose",
+    )
+    assert (alt.results_dir / "handeye_result_pose.json").exists()
+    rot_deg, trans_m = pose_error(alt.solution.T_base_cam, result.solution.T_base_cam)
+    assert rot_deg < 0.3 and trans_m < 0.01
     print(result)
