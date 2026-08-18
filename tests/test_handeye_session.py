@@ -197,9 +197,9 @@ def test_capture_and_solve_synthetic_session(tmp_path: Path, board_alias, target
         target_link="L_ee",
         min_views=8,
         leave_one_out=False,
-        method="pose",
+        method="robotcamcalib",
     )
-    assert (alt.results_dir / "handeye_result_pose.json").exists()
+    assert (alt.results_dir / "handeye_result_robotcamcalib.json").exists()
     rot_deg, trans_m = pose_error(alt.solution.T_base_cam, result.solution.T_base_cam)
     assert rot_deg < 0.3 and trans_m < 0.01
     print(result)

@@ -93,23 +93,15 @@ def test_solve_requires_minimum_views():
         solve_hand_eye(scene.views, scene.camera_matrix, scene.dist_coeffs, min_views=8)
 
 
-def test_pose_method_matches_reprojection_on_board():
-    """RobotCamCalib-style alternative: alternating init + pose-residual GN."""
-    from dexmate_calib.extrinsics.handeye import alternating_init
-
+def test_robotcamcalib_method_matches_reprojection_on_board():
+    """Verbatim RobotCamCalib solver on the same detections lands close to ours."""
     scene = make_scene(views=25, pixel_noise_px=0.4, seed=9)
-    for view in scene.views:
-        view.T_cam_board_pnp = pnp_board_pose(
-            view.object_points, view.image_points, scene.camera_matrix, scene.dist_coeffs
-        )
-    X0, _ = alternating_init(
-        [v.T_base_link for v in scene.views], [v.T_cam_board_pnp for v in scene.views]
-    )
-    rot_deg, trans_m = pose_error(X0, scene.T_base_cam)
-    assert rot_deg < 0.5 and trans_m < 0.01
-
-    pose = solve_hand_eye(
-        scene.views, scene.camera_matrix, scene.dist_coeffs, leave_one_out=False, method="pose"
+    rcc = solve_hand_eye(
+        scene.views,
+        scene.camera_matrix,
+        scene.dist_coeffs,
+        leave_one_out=False,
+        method="robotcamcalib",
     )
     repro = solve_hand_eye(
         scene.views,
@@ -118,13 +110,43 @@ def test_pose_method_matches_reprojection_on_board():
         leave_one_out=False,
         method="reprojection",
     )
-    assert pose.refinement["method"] == "pose" and pose.refinement["converged"]
-    assert pose.initialisation["method"] == "alternating_wahba"
-    for sol in (pose, repro):
+    assert rcc.refinement["method"] == "robotcamcalib"
+    assert rcc.initialisation["method"] == "robotcamcalib_alternating_ls"
+    assert rcc.refinement["iterations"] >= 1
+    for sol in (rcc, repro):
         rot_deg, trans_m = pose_error(sol.T_base_cam, scene.T_base_cam)
         assert rot_deg < 0.1, rot_deg
         assert trans_m < 0.003, trans_m
-    rot_deg, trans_m = pose_error(pose.T_base_cam, repro.T_base_cam)
+    rot_deg, trans_m = pose_error(rcc.T_base_cam, repro.T_base_cam)
     assert rot_deg < 0.1 and trans_m < 0.003
     with pytest.raises(ValueError):
         solve_hand_eye(scene.views, scene.camera_matrix, scene.dist_coeffs, method="bogus")
+
+
+def test_robotcamcalib_port_matches_reference_numerics():
+    """The ported functions reproduce RobotCamCalib on its own synthetic-style inputs."""
+    from dexmate_calib.extrinsics import robotcamcalib as rcc
+
+    rng = np.random.default_rng(0)
+    from dexmate_calib.geometry.transforms import rt_to_T, so3_exp
+
+    X_true = rt_to_T(so3_exp(rng.normal(size=3) * 0.5), rng.normal(size=3) * 0.3)  # X_CammountCam
+    Y_true = rt_to_T(so3_exp(rng.normal(size=3) * 0.5), rng.normal(size=3) * 0.1)  # X_TagmountTag
+    n = 20
+    A = np.stack([rt_to_T(so3_exp(rng.normal(size=3)), rng.normal(size=3)) for _ in range(n)])
+    # A X_tag = X_cam B  ->  B = X_cam^-1 A X_tag ; add small noise to B
+    B = np.stack(
+        [
+            rcc.inv_T(X_true)
+            @ A[i]
+            @ Y_true
+            @ rt_to_T(so3_exp(rng.normal(size=3) * 1e-3), rng.normal(size=3) * 1e-4)
+            for i in range(n)
+        ]
+    )
+    Xc, Xt, info = rcc.calibrate_cammount_and_tag_prob(B, np.repeat(np.eye(4)[None], n, 0), A)
+    rot_deg, trans_m = pose_error(Xc, X_true)
+    assert rot_deg < 0.1 and trans_m < 0.002
+    rot_deg, trans_m = pose_error(Xt, Y_true)
+    assert rot_deg < 0.1 and trans_m < 0.002
+    assert info["iters"] < 200

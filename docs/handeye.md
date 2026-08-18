@@ -89,18 +89,27 @@ T_base_link_i · Y = X · T_cam_board_i        （AX = YB 形式）
    留出样本的重投影误差。
 6. 额外报告运动多样性：link 位姿的最大两两旋转角、旋转轴秩（应为 3）、平移跨度。
 
-### 备选求解方法：`--method pose`（RobotCamCalib 同款）
+### 备选求解方法：`--method robotcamcalib`（RobotCamCalib 原样移植）
 
-`dexcalib extrinsics solve <session> --method pose` 使用与 `RobotCamCalib/extr_calib.py`
-相同的算法：交替最小二乘（Wahba/SVD）初值 + 位姿残差 `se3_log(Y⁻¹·A⁻¹·X·B)` 的
-Gauss-Newton/Levenberg，旋转/平移各自 Huber（3° / 10 mm）与 σ 加权。区别只有两点：
-交替初值迭代到收敛（原版 1.5 轮）、加了步长接受判断（原版无条件接受每一步）。
-它把每帧 PnP 位姿当观测，因此 PnP 噪声会进入结果：合成对照里大板上两者相当（有 FK 噪声时
-位姿法平移略好，因为它显式按 σ 加权），单 tag 上位姿法明显差（约 5 mm vs 0.4 mm）。
+`dexcalib extrinsics solve <session> --method robotcamcalib` 运行
+`src/dexmate_calib/extrinsics/robotcamcalib.py`——这是 `RobotCamCalib/extr_calib.py` 的
+`calibrate_cammount_and_tag_prob`（含 Lie 工具、`_wahba`、交替最小二乘初值、位姿残差
+Gauss-Newton、Huber/σ 权重、停止条件）和 `apriltag_board.py` 的 bundle PnP 的**逐行移植，
+算法未做任何修改**（文件内有 `BEGIN/END VERBATIM` 标记）。只在输入侧做了适配：
 
-`--compare` 会同时跑另一种方法并打印两者 `T_base_cam` 的差异；`pose` 结果写入
-`results/handeye_result_pose.json`，默认方法的结果文件名不变。默认值在 `configs/handeye.yaml`
-的 `solve.method`。
+- 角点对应来自本仓库的板 profile/检测器（ChArUco 或 AprilTag）；
+- `K`/`D` 来自 session 的相机标定（Kinect 出厂内参；RobotCamCalib 用 `D=None` 是因为它的
+  RealSense 流已经去畸变）；
+- `X_WorldTagmount = T_base_link`（Dexmate URDF FK），`X_WorldCammount = I`（相机安装在 base 系）；
+- 输出映射：`X_CammountCam → T_base_cam`，`X_TagmountTag → T_link_board`。
+
+选择该方法时**不**应用本仓库的 IPPE 翻转消解、逐视图剔除和 Kronecker 初值（这些不属于
+RobotCamCalib）；LOO 诊断如启用只是对子集重复运行同一求解器。合成对照：大板上两者相当，
+单 tag 上 RobotCamCalib 法明显差（约 5 mm vs 0.4 mm），因为它把每帧 PnP 位姿当观测。
+
+`--compare` 同时跑另一种方法并打印两者 `T_base_cam` 的差异；该方法的结果写入
+`results/handeye_result_robotcamcalib.json`，默认方法的文件名不变。默认值在
+`configs/handeye.yaml` 的 `solve.method`。
 
 `dexcalib extrinsics selftest` 用合成场景验证整条链路：0.4 px 像素噪声 + 0.03°/0.5 mm
 FK 噪声、25 视图时，`T_base_cam` 误差约 0.05° / 1 mm；注入的离群视图会被识别并剔除。
@@ -220,6 +229,7 @@ reprojection_contact_sheet.jpg 绿=检测角点，紫=最终模型重投影，�
 ```text
 src/dexmate_calib/geometry/transforms.py   SO(3)/SE(3) exp/log、逆、位姿误差（纯 numpy）
 src/dexmate_calib/extrinsics/handeye.py    PnP（IPPE 双候选）、闭式初值、翻转消解、LM refine、剔除、LOO
+src/dexmate_calib/extrinsics/robotcamcalib.py  RobotCamCalib 求解器逐行移植（--method robotcamcalib）
 src/dexmate_calib/boards/apriltag.py       AprilTag 网格/单 tag profile、检测器、渲染、identify
 src/dexmate_calib/extrinsics/synthetic.py  合成场景（测试与 selftest）
 src/dexmate_calib/extrinsics/capture.py    手动采集循环与 session 落盘

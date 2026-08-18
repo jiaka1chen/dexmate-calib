@@ -45,7 +45,6 @@ from dexmate_calib.geometry.transforms import (
     rotation_angle_deg,
     rt_to_T,
     se3_exp,
-    se3_log,
     so3_log,
 )
 
@@ -332,167 +331,6 @@ def _resolve_pnp_ambiguities(views: list[HandEyeView], X: np.ndarray, Y: np.ndar
 # ------------------------------------------------------------------------- refine
 
 
-# ---------------------------------------------- alternative: RobotCamCalib-style
-
-
-def alternating_init(
-    A_list: list[np.ndarray],
-    B_list: list[np.ndarray],
-    sweeps: int = 300,
-    tolerance: float = 1e-10,
-):
-    """Alternating least-squares initialisation for ``A_i Y = X B_i`` (RobotCamCalib style).
-
-    Starting from ``Y = I``: solve ``X`` given ``Y`` (rotation by SVD projection of the
-    mean ``R_A R_Y R_B^T``, translation as the mean of ``R_A t_Y + t_A - R_X t_B``), then
-    ``Y`` given ``X`` (rotation from the mean ``R_A^T R_X R_B``, translation by least
-    squares), and repeat.  Mirrors ``_solve_X_given_Y`` / ``_solve_Y_given_X`` in
-    ``RobotCamCalib/extr_calib.py`` (which stops after 1.5 sweeps and leaves the rest to
-    Gauss-Newton); here the sweeps run until the estimate stops changing, since the
-    alternation converges slowly (tens of sweeps).  Used by ``method="pose"``.
-    """
-    Y = np.eye(4)
-    X = np.eye(4)
-    for _ in range(sweeps):
-        X_prev, Y_prev = X, Y
-        # X given Y
-        RX = project_rotation(
-            sum(A[:3, :3] @ Y[:3, :3] @ B[:3, :3].T for A, B in zip(A_list, B_list))
-        )
-        tX = np.mean(
-            [A[:3, :3] @ Y[:3, 3] + A[:3, 3] - RX @ B[:3, 3] for A, B in zip(A_list, B_list)],
-            axis=0,
-        )
-        X = rt_to_T(RX, tX)
-        # Y given X
-        RY = project_rotation(sum(A[:3, :3].T @ RX @ B[:3, :3] for A, B in zip(A_list, B_list)))
-        M = np.vstack([A[:3, :3] for A in A_list])
-        v = np.concatenate([RX @ B[:3, 3] + tX - A[:3, 3] for A, B in zip(A_list, B_list)])
-        tY, *_ = np.linalg.lstsq(M, v, rcond=None)
-        Y = rt_to_T(RY, tY)
-        if np.max(np.abs(X - X_prev)) < tolerance and np.max(np.abs(Y - Y_prev)) < tolerance:
-            break
-    return X, Y
-
-
-def pose_residuals(views: list[HandEyeView], X: np.ndarray, Y: np.ndarray) -> np.ndarray:
-    """(N, 6) chain-closure residuals ``se3_log(Y^-1 A_i^-1 X B_i)`` = [rotation, translation]."""
-    rows = []
-    for v in views:
-        E = inv_T(Y) @ inv_T(v.T_base_link) @ X @ v.T_cam_board_pnp
-        rows.append(se3_log(E))
-    return np.asarray(rows, dtype=np.float64).reshape(-1, 6)
-
-
-def refine_hand_eye_pose(
-    views: list[HandEyeView],
-    X0: np.ndarray,
-    Y0: np.ndarray,
-    *,
-    sigma_rot_deg: float = 3.0,
-    sigma_trans_m: float = 0.01,
-    huber_rot_deg: float = 3.0,
-    huber_trans_m: float = 0.01,
-    max_iterations: int = 200,
-    tolerance: float = 1e-10,
-) -> tuple[np.ndarray, np.ndarray, dict]:
-    """Pose-residual refinement (RobotCamCalib ``calibrate_cammount_and_tag_prob``).
-
-    Minimises the Mahalanobis-weighted 6-D closure residual of every view with separate
-    Huber weights on its rotation and translation parts; Gauss-Newton with Levenberg
-    damping and numerical Jacobians, left-perturbation on SE(3).  Unlike the reprojection
-    method the per-view PnP poses are treated as the observations, so PnP noise (depth,
-    in-plane tilt) propagates into the result.  Step acceptance is added on top of the
-    original (which applied every step unconditionally) so the objective never increases.
-    """
-    X, Y = X0.copy(), Y0.copy()
-    inv_sw = 1.0 / np.radians(sigma_rot_deg) ** 2
-    inv_sp = 1.0 / sigma_trans_m**2
-    d_w2 = np.radians(huber_rot_deg) ** 2
-    d_p2 = huber_trans_m**2
-
-    def weights(res: np.ndarray) -> np.ndarray:
-        r2w = np.sum(res[:, :3] ** 2, axis=1) * inv_sw
-        r2p = np.sum(res[:, 3:] ** 2, axis=1) * inv_sp
-        ww = np.where(r2w <= d_w2, 1.0, np.sqrt(d_w2 / np.maximum(r2w, 1e-30)))
-        wp = np.where(r2p <= d_p2, 1.0, np.sqrt(d_p2 / np.maximum(r2p, 1e-30)))
-        # Per-component weights laid out like the residuals: [w w w p p p] per view.
-        per_view = np.concatenate(
-            [
-                np.repeat((ww * inv_sw)[:, None], 3, axis=1),
-                np.repeat((wp * inv_sp)[:, None], 3, axis=1),
-            ],
-            axis=1,
-        )
-        return per_view.reshape(-1)
-
-    def cost_of(res: np.ndarray, w: np.ndarray) -> float:
-        return float(np.sum(w * res.reshape(-1) ** 2))
-
-    res = pose_residuals(views, X, Y)
-    w = weights(res)
-    cost = cost_of(res, w)
-    lam = 1e-6
-    eps = 1e-8
-    history = [cost]
-    iterations = 0
-    converged = False
-    for iterations in range(1, max_iterations + 1):
-        r0 = res.reshape(-1)
-        J = np.zeros((r0.size, 12))
-        for k in range(12):
-            dp = np.zeros(12)
-            dp[k] = eps
-            Xp, Yp = _apply_params(dp, X, Y)
-            J[:, k] = (pose_residuals(views, Xp, Yp).reshape(-1) - r0) / eps
-        JtW = J.T * w
-        H = JtW @ J
-        g = JtW @ r0
-        improved = False
-        for _ in range(12):
-            try:
-                delta = -np.linalg.solve(H + lam * np.eye(12), g)
-            except np.linalg.LinAlgError:
-                lam *= 10.0
-                continue
-            Xn, Yn = _apply_params(delta, X, Y)
-            res_n = pose_residuals(views, Xn, Yn)
-            w_n = weights(res_n)
-            cost_n = cost_of(res_n, w_n)
-            if cost_n < cost:
-                X, Y, res, w, cost = Xn, Yn, res_n, w_n, cost_n
-                lam = max(lam / 3.0, 1e-9)
-                improved = True
-                history.append(cost)
-                if float(np.linalg.norm(delta)) < tolerance:
-                    converged = True
-                break
-            lam *= 10.0
-        if not improved or converged:
-            converged = converged or not improved
-            break
-    rot = np.degrees(np.linalg.norm(res[:, :3], axis=1))
-    trans = np.linalg.norm(res[:, 3:], axis=1)
-    info = {
-        "method": "pose",
-        "iterations": iterations,
-        "converged": bool(converged),
-        "huber_rot_deg": huber_rot_deg,
-        "huber_trans_m": huber_trans_m,
-        "closure_rot_deg": {
-            "mean": float(rot.mean()),
-            "median": float(np.median(rot)),
-            "max": float(rot.max()),
-        },
-        "closure_trans_mm": {
-            "mean": float(trans.mean() * 1e3),
-            "median": float(np.median(trans) * 1e3),
-            "max": float(trans.max() * 1e3),
-        },
-    }
-    return X, Y, info
-
-
 def _apply_params(params: np.ndarray, X0: np.ndarray, Y0: np.ndarray):
     return se3_exp(params[:6]) @ X0, se3_exp(params[6:]) @ Y0
 
@@ -645,13 +483,19 @@ def solve_hand_eye(
     """Full pipeline: PnP → closed-form init → refine → outlier rejection → LOO.
 
     ``method="reprojection"`` (default) refines on corner reprojection error after the
-    Kronecker closed-form initialisation; ``method="pose"`` reproduces RobotCamCalib's
-    pipeline (alternating least-squares initialisation + pose-residual Gauss-Newton with
-    rotation/translation Huber weights).  Outlier rejection and leave-one-out use the
-    chosen method; per-view reprojection statistics are reported for both.
+    Kronecker closed-form initialisation, with IPPE flip resolution and per-view outlier
+    rejection.  ``method="robotcamcalib"`` runs the verbatim RobotCamCalib solver
+    (:mod:`dexmate_calib.extrinsics.robotcamcalib`) on the same detections and FK poses:
+    bundle PnP (ITERATIVE + LM), alternating LS init, pose-residual Gauss-Newton with
+    Huber; no flip resolution or rejection rounds.  Per-view reprojection statistics are
+    reported for both.
     """
-    if method not in ("reprojection", "pose"):
-        raise ValueError("method must be 'reprojection' or 'pose'")
+    if method not in ("reprojection", "robotcamcalib"):
+        raise ValueError("method must be 'reprojection' or 'robotcamcalib'")
+    if method == "robotcamcalib":
+        return _solve_hand_eye_robotcamcalib(
+            views, camera_matrix, dist_coeffs, min_views=min_views, leave_one_out=leave_one_out
+        )
     if len(views) < min_views:
         raise ValueError(f"Need at least {min_views} views, got {len(views)}")
     K = np.asarray(camera_matrix, dtype=np.float64)
@@ -680,13 +524,7 @@ def solve_hand_eye(
     # chain prediction and re-initialise until the candidate choice is stable.
     flips_total = 0
     for _ in range(4):
-        if method == "pose":
-            X, Y = alternating_init(
-                [v.T_base_link for v in active], [v.T_cam_board_pnp for v in active]
-            )
-            candidates = [("alternating_wahba", X, Y)]
-        else:
-            candidates = initial_hand_eye(active)
+        candidates = initial_hand_eye(active)
         scored = []
         for name, X, Y in candidates:
             rms = _rms_from_residuals(stacked_residuals(active, X, Y, K, D))
@@ -708,8 +546,6 @@ def solve_hand_eye(
     }
 
     def refine(subset, X_init, Y_init, **kw):
-        if method == "pose":
-            return refine_hand_eye_pose(subset, X_init, Y_init, **kw)
         return refine_hand_eye(subset, K, D, X_init, Y_init, huber_px=huber_px, **kw)
 
     refine_info: dict = {}
@@ -776,5 +612,108 @@ def solve_hand_eye(
         rejected_views=rejected,
         initialisation=initialisation,
         refinement=refine_info,
+        diagnostics=diagnostics,
+    )
+
+
+def _solve_hand_eye_robotcamcalib(
+    views: list[HandEyeView],
+    camera_matrix: np.ndarray,
+    dist_coeffs: np.ndarray | None,
+    *,
+    min_views: int,
+    leave_one_out: bool,
+) -> HandEyeSolution:
+    """RobotCamCalib pipeline on dexmate-calib inputs; see ``extrinsics/robotcamcalib.py``."""
+    from dexmate_calib.extrinsics import robotcamcalib as rcc
+
+    K = np.asarray(camera_matrix, dtype=np.float64)
+    D = None if dist_coeffs is None else np.asarray(dist_coeffs, dtype=np.float64).reshape(-1)
+    rejected: list[dict] = []
+    active: list[HandEyeView] = []
+    for v in views:
+        try:
+            v.T_cam_board_pnp = rcc.estimate_board_pose_bundle_pnp(
+                v.object_points, v.image_points, K, D
+            )
+            v.T_cam_board_candidates = [v.T_cam_board_pnp]
+            active.append(v)
+        except (RuntimeError, ValueError, _cv2().error) as exc:
+            rejected.append({"view": v.name, "reason": f"pnp_failed: {exc}"})
+    if len(active) < min_views:
+        raise ValueError(f"Only {len(active)} views survived PnP; need {min_views}")
+
+    A = [v.T_base_link for v in active]
+    B = [v.T_cam_board_pnp for v in active]
+    # Report the LS initialisation exactly as calibrate_cammount_and_tag_prob computes it
+    # (X_TagmountTag = I -> Y -> X -> Y); the solver recomputes it internally.
+    Xt = np.eye(4)
+    Yc = rcc._solve_Y_given_X(A, B, Xt)
+    Xt = rcc._solve_X_given_Y(A, B, Yc)
+    Yc = rcc._solve_Y_given_X(A, B, Xt)
+    init_X, init_Y = Yc, Xt  # X_CammountCam = T_base_cam, X_TagmountTag = T_link_board
+    init_rms = _rms_from_residuals(stacked_residuals(active, init_X, init_Y, K, D))
+    init_rot_gap, init_trans_gap = _pose_chain_rms(active, init_X, init_Y)
+
+    X, Y, info = rcc.solve_third_view(A, B)
+    reports = [_view_report(v, X, Y, K, D) for v in active]
+    final_rms = _rms_from_residuals(stacked_residuals(active, X, Y, K, D))
+    diagnostics = {"motion_diversity": motion_diversity(active)}
+    if leave_one_out and len(active) > min_views:
+        loo_rot, loo_trans, loo_rms = [], [], []
+        for i in range(len(active)):
+            subset = active[:i] + active[i + 1 :]
+            Xi, Yi, _ = rcc.solve_third_view(
+                [v.T_base_link for v in subset], [v.T_cam_board_pnp for v in subset]
+            )
+            r_deg, t_m = pose_error(X, Xi)
+            loo_rot.append(r_deg)
+            loo_trans.append(t_m)
+            loo_rms.append(_view_report(active[i], Xi, Yi, K, D)["rms_px"])
+        diagnostics["leave_one_out"] = {
+            "T_base_cam_rotation_spread_deg": {
+                "median": float(np.median(loo_rot)),
+                "max": float(np.max(loo_rot)),
+            },
+            "T_base_cam_translation_spread_mm": {
+                "median": float(np.median(loo_trans) * 1000.0),
+                "max": float(np.max(loo_trans) * 1000.0),
+            },
+            "held_out_view_rms_px": {
+                "median": float(np.median(loo_rms)),
+                "p90": float(np.percentile(loo_rms, 90)),
+                "max": float(np.max(loo_rms)),
+            },
+        }
+    return HandEyeSolution(
+        T_base_cam=X,
+        T_link_board=Y,
+        rms_px=final_rms,
+        view_reports=reports,
+        inlier_views=[v.name for v in active],
+        rejected_views=rejected,
+        initialisation={
+            "method": "robotcamcalib_alternating_ls",
+            "rms_px": init_rms,
+            "mean_pnp_rotation_gap_deg": init_rot_gap,
+            "mean_pnp_translation_gap_mm": init_trans_gap * 1000.0,
+            "pnp_flips_resolved": 0,
+        },
+        refinement={
+            "method": "robotcamcalib",
+            "iterations": int(info["iters"]),
+            "converged": bool(info["iters"] < 200),
+            "closure_rot_deg": {
+                "mean": info["rot_err_deg_mean"],
+                "median": info["rot_err_deg_med"],
+                "max": info["rot_err_deg_max"],
+            },
+            "closure_trans_mm": {
+                "mean": info["trans_err_mean"] * 1000.0,
+                "median": info["trans_err_med"] * 1000.0,
+                "max": info["trans_err_max"] * 1000.0,
+            },
+            "final_rms_px": final_rms,
+        },
         diagnostics=diagnostics,
     )

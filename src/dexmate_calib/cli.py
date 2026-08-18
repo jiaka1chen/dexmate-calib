@@ -297,7 +297,7 @@ def _cmd_extrinsics(args: argparse.Namespace) -> int:
             from dexmate_calib.geometry.transforms import pose_error
 
             primary = result.solution.refinement.get("method", "reprojection")
-            other_method = "pose" if primary == "reprojection" else "reprojection"
+            other_method = "robotcamcalib" if primary == "reprojection" else "reprojection"
             other = solve_handeye_session(
                 args.session,
                 robot_model=args.robot_model,
@@ -587,9 +587,9 @@ def build_parser() -> argparse.ArgumentParser:
     ex_solve.add_argument("--no-leave-one-out", action="store_true")
     ex_solve.add_argument(
         "--method",
-        choices=("reprojection", "pose"),
+        choices=("reprojection", "robotcamcalib"),
         default=None,
-        help="reprojection (default): corner reprojection LM; pose: RobotCamCalib-style pose-residual GN",
+        help="reprojection (default): corner reprojection LM; robotcamcalib: verbatim RobotCamCalib solver",
     )
     ex_solve.add_argument(
         "--compare",
