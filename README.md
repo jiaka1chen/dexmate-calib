@@ -74,9 +74,11 @@ HD1200、1920×1200、rectified `LEFT`，不能与 raw/HD1080/crop 后的图像�
 ## 方法来源与 Dexmate 约束
 
 采集质量、标定板区域清晰度、姿态多样性、稳健离群值剔除和交叉验证的组织方式参考了
-同级 `RobotCamCalib/intr_calib_charuco.py` 的成熟流程，并在本仓库中独立实现。当前工具
-不会 import 或运行 RobotCamCalib，也不会引入其中的 USB camera、fisheye、AprilTag Grid
-或 raw-image distortion 模型。Dexmate 输入是 ZED SDK 的 rectified `LEFT`，所以求解器始终
+同级 `RobotCamCalib/intr_calib_charuco.py` 的成熟流程，并在本仓库中独立实现。手眼标定的默认
+求解器同样是独立实现，另提供 `RobotCamCalib/extr_calib.py` 求解器的逐行移植作为对照
+（`--method robotcamcalib`）。当前工具不会 import 或运行 RobotCamCalib，也不引入其中的
+USB camera、fisheye、pupil-apriltags 或 raw-image distortion 模型；AprilTag 网格用 OpenCV
+内置字典检测。内参部分的 Dexmate 输入是 ZED SDK 的 rectified `LEFT`，所以内参求解器始终
 固定全部 distortion coefficients 为零，并拒绝非 HD1200/1920×1200 session。
 
 ## 安装

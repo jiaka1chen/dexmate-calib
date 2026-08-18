@@ -241,8 +241,10 @@ src/dexmate_calib/cameras/kinect.py        pyk4a 封装：BGR 帧、depth、出�
 configs/handeye.yaml                       上述所有锁定参数的默认值
 ```
 
-方法上参考了同级 `RobotCamCalib/extr_calib.py`（AX=YB 联合估计、Huber、多样性检查），
-但本仓库独立实现，不 import 它，也不引入 Viser、xArm、RealSense、AprilTag 依赖。
+默认求解方法在思路上参考了同级 `RobotCamCalib/extr_calib.py`（AX=YB 联合估计、Huber），
+但在本仓库独立实现；`--method robotcamcalib` 则是其求解器的逐行移植
+（`extrinsics/robotcamcalib.py`），只把输入接到我们的板 profile、Kinect 内参和 Dexmate FK 上。
+两者都不 import 或运行 RobotCamCalib，也不引入 Viser、xArm、RealSense、pupil-apriltags 依赖。
 
 ## 已知边界
 
