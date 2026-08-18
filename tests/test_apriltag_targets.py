@@ -129,7 +129,8 @@ def test_identify_markers_finds_family_and_id():
     profile = resolve_board_profile("single-tag-75")
     frame = _warp_sheet(profile, rt_to_T(so3_exp([0.1, 0.05, 0.0]), [0.0, 0.0, 0.7]))
     found = identify_markers(frame)
-    hits = [f for f in found if f["dictionary"] == "DICT_APRILTAG_36h11" and f["id"] == 0]
+    expected_id = profile.tags[0].tag_id
+    hits = [f for f in found if f["dictionary"] == "DICT_APRILTAG_36h11" and f["id"] == expected_id]
     assert hits, found
     assert 60 < hits[0]["side_px"] < 130
 
