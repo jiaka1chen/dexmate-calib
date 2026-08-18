@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from dexmate_calib.boards.config import load_board_profile
+from dexmate_calib.boards.config import create_detector, load_board_profile
 from dexmate_calib.extrinsics.capture import SESSION_SCHEMA
 from dexmate_calib.extrinsics.handeye import (
     HandEyeSolution,
@@ -22,7 +22,6 @@ from dexmate_calib.extrinsics.handeye import (
     solve_hand_eye,
 )
 from dexmate_calib.geometry.transforms import rotation_angle_deg
-from dexmate_calib.intrinsics.detector import CharucoDetector
 
 
 @dataclass
@@ -105,7 +104,8 @@ def load_session_views(
     board = load_board_profile(session_dir / manifest["board"]["profile_file"])
     if board.sha256 != manifest["board"]["profile_sha256"]:
         raise ValueError("Board profile snapshot hash does not match the manifest")
-    detector = CharucoDetector(board)
+    detector = create_detector(board)
+    min_corners = min(min_corners, board.expected_corner_count)
     required = set(kinematics.required_joints_for(target_link))
 
     views: list[HandEyeView] = []

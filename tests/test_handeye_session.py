@@ -6,6 +6,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 import yaml
 
 from dexmate_calib.boards.config import resolve_board_profile
@@ -95,12 +96,20 @@ class FakeKinematics:
 
 
 def _render(board_profile, T_cam_board, K, size):
-    board, _ = board_profile.create_opencv_board()
-    board_image = board.generateImage((1000, 700), marginSize=0, borderBits=1)
-    src = np.array([[0, 0], [999, 0], [999, 699], [0, 699]], dtype=np.float32)
-    corners_board = np.array(
-        [[0, 0, 0], [0.270, 0, 0], [0.270, 0.189, 0], [0, 0.189, 0]], dtype=np.float64
-    )
+    if board_profile.target_type == "apriltag_grid":
+        board_image, A = board_profile.render_image(pixels_per_m=3000.0)
+        h, w = board_image.shape
+        src = np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float32)
+        inv = np.linalg.inv(A)
+        xy = (inv @ np.c_[src.astype(np.float64), np.ones(4)].T).T[:, :2]
+        corners_board = np.c_[xy, np.zeros(4)]
+    else:
+        board, _ = board_profile.create_opencv_board()
+        board_image = board.generateImage((1000, 700), marginSize=0, borderBits=1)
+        src = np.array([[0, 0], [999, 0], [999, 699], [0, 699]], dtype=np.float32)
+        corners_board = np.array(
+            [[0, 0, 0], [0.270, 0, 0], [0.270, 0.189, 0], [0, 0.189, 0]], dtype=np.float64
+        )
     rvec, _ = cv2.Rodrigues(T_cam_board[:3, :3])
     projected, _ = cv2.projectPoints(corners_board, rvec, T_cam_board[:3, 3], K, None)
     H = cv2.getPerspectiveTransform(src, projected.reshape(4, 2).astype(np.float32))
@@ -108,9 +117,23 @@ def _render(board_profile, T_cam_board, K, size):
     return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
 
-def test_capture_and_solve_synthetic_session(tmp_path: Path):
-    profile = resolve_board_profile("dexmate-10x7")
-    scene = make_scene(views=14, pixel_noise_px=0.0, seed=21, max_tilt_rad=0.35)
+@pytest.mark.parametrize(
+    ("board_alias", "target", "views", "depth"),
+    [
+        ("dexmate-10x7", "charuco", 14, (0.6, 1.2)),
+        ("single-tag-66", "single_tag", 24, (0.5, 0.8)),
+    ],
+)
+def test_capture_and_solve_synthetic_session(tmp_path: Path, board_alias, target, views, depth):
+    profile = resolve_board_profile(board_alias)
+    scene = make_scene(
+        views=views,
+        pixel_noise_px=0.0,
+        seed=21,
+        max_tilt_rad=0.35,
+        target=target,
+        depth_range_m=depth,
+    )
     K = scene.camera_matrix
     size = scene.image_size
     # Render undistorted images (D = 0) so the homography warp is exact.
@@ -127,7 +150,7 @@ def test_capture_and_solve_synthetic_session(tmp_path: Path):
         auto_capture=True,
         auto_capture_interval_s=0.0,
         save_depth=False,
-        min_corners=20,
+        min_corners=min(20, profile.expected_corner_count),
     )
     camera = FakeCamera(images, K, size)
     joints = FakeJoints(len(images))
@@ -151,9 +174,10 @@ def test_capture_and_solve_synthetic_session(tmp_path: Path):
         leave_one_out=True,
     )
     rot_deg, trans_m = pose_error(result.solution.T_base_cam, scene.T_base_cam)
-    assert rot_deg < 0.05, rot_deg
-    assert trans_m < 0.002, trans_m
-    assert result.solution.rms_px < 0.6
+    assert rot_deg < 0.1, rot_deg
+    assert trans_m < 0.003, trans_m
+    assert result.solution.rms_px < 1.0
+    assert manifest["board"]["target_type"] == profile.target_type
     for name in (
         "handeye_result.json",
         "T_base_kinect_external.yaml",

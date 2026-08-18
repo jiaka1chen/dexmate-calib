@@ -14,7 +14,8 @@
   `T_color_depth`）。捕获时整体导出为 `camera_calibration.json`，离线求解不依赖 SDK。
 - 机器人：`vega_1p`（`dexmate-urdf`），`base_frame = base`（URDF 根），板贴在 **`L_ee`**
   （左臂法兰）。`base → L_ee` 链上的关节：`torso_j1..3`、`L_arm_j1..7`。
-- 板：`dexmate-10x7`（同内参标定，27 mm 方格，`DICT_5X5_50`）。
+- 标定目标：默认 `dexmate-10x7` ChArUco 板（同内参标定，27 mm 方格，`DICT_5X5_50`）；也支持
+  **AprilTag 网格**（任意 rows×cols，含 1×1 单个 tag），见下文"标定目标"。
 - 运动方式：**只允许手动、逐关节、小步长**。两种等价方式：
   (a) `dexcalib extrinsics capture --teleop`——预览窗口同时接收运动键和拍照键，单终端；
   (b) 另开终端跑 dexcontrol 自带的 `examples/advanced_examples/keyboard_joint_control.py`，
@@ -23,6 +24,39 @@
 坐标约定：`T_a_b` 是 4×4 齐次矩阵，把 `b` 系下的点变换到 `a` 系，即 `b` 在 `a` 中的位姿。
 `T_base_cam` 中的 `cam` 是 Kinect **color** 相机光心系（OpenCV：x 右、y 下、z 前）。
 `T_base_depth = T_base_cam @ T_color_depth` 一并写入结果。
+
+## 标定目标
+
+求解器只消费"板坐标系 3D 点 ↔ 图像 2D 点"，目标类型由 `configs/boards/*.yaml` 的
+`target_type` 决定（`dexcalib board list` 列出全部）：
+
+| profile | 类型 | 角点/视图 | 说明 |
+|---|---|---|---|
+| `dexmate-10x7` | `charuco` | 54 | 默认；精度最好，实物已实测 |
+| `apriltag-4x4`（`robotcamcalib-4x4`） | `apriltag_grid` | 64 | 与 RobotCamCalib `compact_apriltag_grid_4x4_tag48mm` 同规格：tag36h11 id 0–15、48 mm、间距 52.17 mm |
+| `single-tag-66` | `apriltag_grid` 1×1 | 4 | 单个 66 mm tag；精度受限，见下 |
+
+AprilTag profile 字段：`apriltag.family`（`tag36h11`/`tag36h10`/`tag25h9`/`tag16h5`）、
+`layout.rows/cols/tag_id_start/tag_size_m/pitch_m`，或显式 `tags: [{id, center_m, size_m}]`
+（可混合不同尺寸）。板坐标系与 OpenCV ChArUco 板同手性：原点在第一个 tag 中心，x 右、y 下、
+z 指向纸面内；每个 tag 角点按 OpenCV 顺序 TL、TR、BR、BL。检测用 OpenCV 内置的 AprilTag
+字典，无额外依赖。`tag_size_m` 是黑色方框外缘边长，必须用卡尺实测——平移结果按它等比缩放。
+
+相关命令：
+
+```bash
+dexcalib board identify --image photo.png        # 扫描全部 ArUco/AprilTag 字典，识别未知 tag 的家族与 id
+dexcalib board render --board apriltag-4x4 --output grid.png --dpi 300   # 生成可打印 PNG（100% 打印后量尺寸）
+dexcalib board verify --board single-tag-66 --image photo.png            # 用配置检测一张实拍图
+dexcalib extrinsics capture --board single-tag-66 ...                    # 采集时指定目标
+```
+
+采集/求解的质量门会自动按目标能力收紧（单 tag：最少 4 角点、1×1 网格）。
+
+**单个平面 tag 的边界**：每视图仅 4 个角点，且存在 IPPE 位姿翻转二义性。求解器会为每视图保留两个
+PnP 候选，用闭式初值预测的板位姿消解翻转（结果里 `initialisation.pnp_flips_resolved` 记录次数），
+再以重投影误差 refine。合成测试（0.3–1 px 噪声）下 4×4 网格与 ChArUco 精度相当，单 tag 在 40 视图、
+0.8–1.1 m 时约 0.06°/1.5 mm；实机建议 0.5–0.8 m 工作距离、50+ 视图、旋转多样性充分。
 
 ## 数学模型
 
@@ -40,7 +74,8 @@ T_base_link_i · Y = X · T_cam_board_i        （AX = YB 形式）
 
 求解流程（`src/dexmate_calib/extrinsics/handeye.py`）：
 
-1. 每张图 `solvePnP` + LM refine 得到 `T_cam_board_i`（带完整畸变）。
+1. 每张图用 IPPE（平面）求 `T_cam_board_i` 的候选并 LM refine（带完整畸变）；平面目标最多两个候选，
+   在闭式初值后按链式预测消解翻转。
 2. Kronecker 线性闭式解（Li 2010）给出 `X`、`Y` 初值。这里没有使用 OpenCV 的
    `calibrateRobotWorldHandEye`，因为 opencv-contrib-python 5.0 的 wheel 不再暴露它。
 3. 在 SE(3) 上做 Levenberg–Marquardt，**直接最小化所有角点的重投影误差**（12 个参数），
@@ -168,7 +203,8 @@ reprojection_contact_sheet.jpg 绿=检测角点，紫=最终模型重投影，�
 
 ```text
 src/dexmate_calib/geometry/transforms.py   SO(3)/SE(3) exp/log、逆、位姿误差（纯 numpy）
-src/dexmate_calib/extrinsics/handeye.py    PnP、闭式初值、LM refine、剔除、LOO（numpy + cv2）
+src/dexmate_calib/extrinsics/handeye.py    PnP（IPPE 双候选）、闭式初值、翻转消解、LM refine、剔除、LOO
+src/dexmate_calib/boards/apriltag.py       AprilTag 网格/单 tag profile、检测器、渲染、identify
 src/dexmate_calib/extrinsics/synthetic.py  合成场景（测试与 selftest）
 src/dexmate_calib/extrinsics/capture.py    手动采集循环与 session 落盘
 src/dexmate_calib/extrinsics/solve.py      读 session、FK、求解、写 results/

@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from dexmate_calib.boards.config import load_board_profile
+from dexmate_calib.boards.config import load_board_profile, require_charuco
 from dexmate_calib.intrinsics.detector import CharucoDetector
 from dexmate_calib.intrinsics.diagnostics import (
     downscale_for_diagnostics,
@@ -426,7 +426,7 @@ def solve_session(
         raise FileNotFoundError(f"Session manifest not found: {manifest_path}")
     initial_manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     board_path = session_dir / initial_manifest["board"]["profile_file"]
-    board = load_board_profile(board_path)
+    board = require_charuco(load_board_profile(board_path), "intrinsic solve")
     if board.sha256 != initial_manifest["board"]["profile_sha256"]:
         raise ValueError("Session board profile hash does not match manifest")
     detector = CharucoDetector(board)

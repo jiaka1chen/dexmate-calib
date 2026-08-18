@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 import yaml
 
-from dexmate_calib.boards.config import load_board_profile
+from dexmate_calib.boards.config import load_board_profile, require_charuco
 from dexmate_calib.intrinsics.detector import CharucoDetector
 from dexmate_calib.intrinsics.diagnostics import (
     downscale_for_diagnostics,
@@ -74,7 +74,7 @@ def _load_sources(sessions: list[str | Path]) -> tuple[list[SessionSource], dict
             raise FileNotFoundError(f"Session manifest not found: {manifest_path}")
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
         board_path = session_dir / manifest["board"]["profile_file"]
-        board = load_board_profile(board_path)
+        board = require_charuco(load_board_profile(board_path), "intrinsic solve-multi")
         if board.sha256 != manifest["board"].get("profile_sha256"):
             raise ValueError(f"Session board profile hash does not match manifest: {session_dir}")
         contract = _camera_contract(manifest)
@@ -251,7 +251,7 @@ def solve_sessions(
     selection_rows: list[dict] = []
     session_summaries: list[dict[str, Any]] = []
     for source in sources:
-        board = load_board_profile(source.board_path)
+        board = require_charuco(load_board_profile(source.board_path), "intrinsic solve-multi")
         detector = CharucoDetector(board)
         (
             _manifest,

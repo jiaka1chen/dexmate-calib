@@ -32,6 +32,19 @@ def default_board_points(
     return np.asarray(pts, dtype=np.float64)
 
 
+def target_points(target: str) -> np.ndarray:
+    """Board points for a named synthetic target."""
+    if target == "charuco":
+        return default_board_points()
+    from dexmate_calib.boards.config import resolve_board_profile
+
+    alias = {"apriltag_4x4": "apriltag-4x4", "single_tag": "single-tag-66"}.get(target, target)
+    profile = resolve_board_profile(alias)
+    if not hasattr(profile, "object_points"):
+        raise ValueError(f"{target!r} is not an AprilTag profile")
+    return profile.object_points()
+
+
 def kinect_like_intrinsics() -> tuple[np.ndarray, np.ndarray, tuple[int, int]]:
     K = np.array([[976.5, 0.0, 1019.1], [0.0, 976.3, 780.7], [0.0, 0.0, 1.0]])
     D = np.array([0.27, -2.47, 0.0006, -0.0002, 1.48, 0.154, -2.29, 1.40])
@@ -47,6 +60,8 @@ def make_scene(
     outliers: int = 0,
     seed: int = 0,
     max_tilt_rad: float = 0.6,
+    target: str = "charuco",
+    depth_range_m: tuple[float, float] = (0.6, 1.2),
 ) -> SyntheticScene:
     """Generate consistent (T_base_link_i, corner observations) for random X and Y.
 
@@ -56,7 +71,7 @@ def make_scene(
     """
     rng = np.random.default_rng(seed)
     K, D, size = kinect_like_intrinsics()
-    board = default_board_points()
+    board = target_points(target)
     board_center = board.mean(axis=0)
 
     # Camera in base: in front, slightly above, looking back towards the robot (-x_base).
@@ -76,7 +91,7 @@ def make_scene(
         # Board pose in the camera: facing the camera, tilted, 0.6-1.2 m away, spread over image.
         rvec = rng.uniform(-max_tilt_rad, max_tilt_rad, size=3)
         R_cb = so3_exp(rvec)
-        depth = rng.uniform(0.6, 1.2)
+        depth = rng.uniform(*depth_range_m)
         # Keep the projected board centre inside the image.
         u = rng.uniform(0.2, 0.8) * size[0]
         v = rng.uniform(0.2, 0.8) * size[1]

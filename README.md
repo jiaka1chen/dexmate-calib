@@ -265,10 +265,13 @@ HD1200 内参用于 HD1080，也不能把 1920×1200 非等比例拉伸到 640×
 dexcalib kinect info                       # 出厂内参、depth→color 外参、serial
 dexcalib extrinsics selftest               # 合成场景自检
 dexcalib extrinsics capture --teleop --samples 30   # 预览窗口里 w/s 逐关节小步动手臂，空格保存
+dexcalib extrinsics capture --board single-tag-66 …  # 也可用 AprilTag 网格 / 单个 tag（board identify 可识别未知 tag）
 dexcalib extrinsics solve calibration_data/handeye_kinect/<session>
 ```
 
-求解 `T_base_link_i · Y = X · T_cam_board_i` 中的 `X = T_base_cam` 与 `Y = T_link_board`：
+标定目标可以是 ChArUco 板（默认 `dexmate-10x7`）或任意 rows×cols 的 AprilTag 网格（含单个 tag，
+`configs/boards/apriltag_*.yaml`）。求解 `T_base_link_i · Y = X · T_cam_board_i` 中的 `X = T_base_cam`
+与 `Y = T_link_board`：
 PnP → Kronecker 闭式初值 → SE(3) 上以重投影误差做 LM refine（Huber）→ 逐视图剔除 →
 leave-one-out。结果、判定标准、session 与 `results/` 格式见 [docs/handeye.md](docs/handeye.md)。
 所有锁定参数在 `configs/handeye.yaml`。

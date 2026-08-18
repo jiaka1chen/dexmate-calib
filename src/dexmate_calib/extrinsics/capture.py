@@ -21,8 +21,8 @@ from typing import Any, Protocol
 import numpy as np
 import yaml
 
-from dexmate_calib.boards.config import BoardProfile
-from dexmate_calib.intrinsics.detector import CharucoDetector, Detection
+from dexmate_calib.boards.config import AnyBoardProfile, create_detector
+from dexmate_calib.intrinsics.detector import Detection
 
 SESSION_SCHEMA = "dexmate_calib.handeye_session.v1"
 
@@ -57,6 +57,32 @@ class HandEyeCaptureSettings:
     save_depth: bool = True
 
 
+def clamp_settings_to_target(
+    settings: HandEyeCaptureSettings, board: AnyBoardProfile
+) -> HandEyeCaptureSettings:
+    """Lower the quality gates to what the target can physically provide.
+
+    The defaults are written for the 10x7 ChArUco board (54 corners); a 4x4 AprilTag grid
+    has 64 corners but only a 4x4 tag lattice, and a single tag has 4 corners in a 1x1
+    lattice.  Gates above those maxima would reject every frame.
+    """
+    from dataclasses import replace
+
+    min_corners = min(settings.min_corners, board.expected_corner_count)
+    rows = settings.min_grid_rows
+    cols = settings.min_grid_cols
+    if board.target_type == "apriltag_grid":
+        rows = min(rows, board.rows)
+        cols = min(cols, board.cols)
+    if (min_corners, rows, cols) == (
+        settings.min_corners,
+        settings.min_grid_rows,
+        settings.min_grid_cols,
+    ):
+        return settings
+    return replace(settings, min_corners=min_corners, min_grid_rows=rows, min_grid_cols=cols)
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -87,7 +113,7 @@ def _detection_stats(detection: Detection) -> dict:
 def render_handeye_preview(
     cv2,
     image_bgr: np.ndarray,
-    detector: CharucoDetector,
+    detector,
     detection: Detection | None,
     *,
     accepted: int,
@@ -124,7 +150,7 @@ def _write_manifest(
     *,
     created_at_utc: str,
     status: str,
-    board: BoardProfile,
+    board: AnyBoardProfile,
     board_snapshot: Path,
     camera_calibration: dict,
     robot_info: dict,
@@ -155,6 +181,7 @@ def _write_manifest(
         },
         "board": {
             "name": board.name,
+            "target_type": board.target_type,
             "profile_file": board_snapshot.name,
             "profile_sha256": board.sha256,
             "mounted_on": settings.target_link,
@@ -176,7 +203,7 @@ def _write_manifest(
 
 
 def capture_handeye_session(
-    board: BoardProfile,
+    board: AnyBoardProfile,
     camera: FrameSource,
     joints: JointSource | None,
     settings: HandEyeCaptureSettings,
@@ -196,7 +223,8 @@ def capture_handeye_session(
     """
     import cv2
 
-    detector = CharucoDetector(board)
+    detector = create_detector(board)
+    settings = clamp_settings_to_target(settings, board)
     calibration = camera.calibration.as_dict()
     created = _utc_now()
     stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
@@ -239,6 +267,12 @@ def capture_handeye_session(
 
     accepted = 0
     last_auto = 0.0
+    idle_frames = 0
+    # Headless auto-capture (tests / scripted runs) must not spin forever on a target that
+    # never passes the gates.
+    max_idle_frames = (
+        0 if settings.preview or not settings.auto_capture else 200 * max(1, settings.max_samples)
+    )
     robot_status = "n/a (no joint source)" if joints is None else "not sampled yet"
     status = "aborted"
     try:
@@ -248,6 +282,13 @@ def capture_handeye_session(
                 image = frame.color_bgr
                 detection = detector.detect(image, detailed_quality=False)
                 reason = _quality_reason(detection, settings)
+                if max_idle_frames:
+                    idle_frames += 1
+                    if idle_frames > max_idle_frames:
+                        raise RuntimeError(
+                            f"auto-capture made no progress in {max_idle_frames} frames "
+                            f"(last reason: {reason}); check the target and quality gates"
+                        )
                 key = wait_key(1)
                 if key in (27, ord("q")):
                     status = "stopped_by_user"
@@ -298,6 +339,7 @@ def capture_handeye_session(
                             records.write(json.dumps(record, separators=(",", ":")) + "\n")
                             records.flush()
                             accepted += 1
+                            idle_frames = 0
                             write_manifest("capturing", accepted)
                             robot_status = f"saved #{accepted - 1}" + (
                                 f" (motion {joint_sample.max_motion_rad:.4f} rad)"

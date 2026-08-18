@@ -9,13 +9,14 @@ import yaml
 
 from dexmate_calib.boards.config import (
     available_board_profiles,
+    create_detector,
     load_board_profile,
+    require_charuco,
     resolve_board_profile,
 )
 from dexmate_calib.diagnostics.doctor import doctor_network, doctor_stream, print_report
 from dexmate_calib.extrinsics.config import load_handeye_config
 from dexmate_calib.intrinsics.capture import CaptureSettings, capture_session
-from dexmate_calib.intrinsics.detector import CharucoDetector
 from dexmate_calib.intrinsics.multi_solve import solve_sessions
 from dexmate_calib.intrinsics.solve import solve_session
 from dexmate_calib.remote.streamer import RemoteStreamerManager
@@ -31,7 +32,10 @@ def _cmd_board(args: argparse.Namespace) -> int:
     if args.board_command == "list":
         for profile in available_board_profiles():
             aliases = ", ".join(profile.data.get("aliases", [])) or "-"
-            print(f"{profile.name}\taliases={aliases}\tsha256={profile.sha256[:12]}")
+            print(
+                f"{profile.name}\t{profile.target_type}\taliases={aliases}"
+                f"\tsha256={profile.sha256[:12]}"
+            )
         return 0
     if args.board_command == "show":
         profile = resolve_board_profile(args.board)
@@ -40,8 +44,8 @@ def _cmd_board(args: argparse.Namespace) -> int:
         return 0
     if args.board_command == "validate":
         profile = load_board_profile(args.path)
-        profile.create_opencv_board()
-        print(f"OK: {profile.name} ({profile.sha256})")
+        create_detector(profile)
+        print(f"OK: {profile.name} [{profile.target_type}] ({profile.sha256})")
         return 0
     if args.board_command == "verify":
         import cv2
@@ -50,10 +54,11 @@ def _cmd_board(args: argparse.Namespace) -> int:
         image = cv2.imread(str(Path(args.image).expanduser()), cv2.IMREAD_COLOR)
         if image is None:
             raise FileNotFoundError(f"Cannot read image: {args.image}")
-        detection = CharucoDetector(profile).detect(image)
+        detection = create_detector(profile).detect(image)
         result = {
             "ok": detection is not None,
             "board": profile.name,
+            "target_type": profile.target_type,
             "expected_markers": profile.expected_marker_count,
             "expected_corners": profile.expected_corner_count,
             "detected_markers": detection.marker_count if detection else 0,
@@ -61,6 +66,35 @@ def _cmd_board(args: argparse.Namespace) -> int:
         }
         print(json.dumps(result, indent=2))
         return 0 if detection is not None else 2
+    if args.board_command == "identify":
+        import cv2
+
+        from dexmate_calib.boards.apriltag import identify_markers
+
+        image = cv2.imread(str(Path(args.image).expanduser()), cv2.IMREAD_COLOR)
+        if image is None:
+            raise FileNotFoundError(f"Cannot read image: {args.image}")
+        found = identify_markers(image)
+        print(json.dumps({"image": str(args.image), "markers": found}, indent=2))
+        return 0 if found else 2
+    if args.board_command == "render":
+        import cv2
+
+        profile = resolve_board_profile(args.board)
+        if not hasattr(profile, "render_image"):
+            raise ValueError("render currently supports AprilTag grid profiles only")
+        pixels_per_m = args.dpi / 0.0254
+        image, _ = profile.render_image(pixels_per_m=pixels_per_m, margin_m=args.margin_mm / 1000.0)
+        out = Path(args.output).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if not cv2.imwrite(str(out), image):
+            raise OSError(f"Failed to write {out}")
+        print(
+            f"wrote {out}: {image.shape[1]}x{image.shape[0]} px at {args.dpi} dpi "
+            f"({image.shape[1] / pixels_per_m * 1000:.1f} x {image.shape[0] / pixels_per_m * 1000:.1f} mm; "
+            "print at 100% and measure a tag edge)"
+        )
+        return 0
     raise AssertionError(args.board_command)
 
 
@@ -88,7 +122,7 @@ def _cmd_intrinsics(args: argparse.Namespace) -> int:
             raise ValueError("--manual requires the preview window; remove --no-preview")
         if args.detect_fps < 0:
             raise ValueError("--detect-fps must be >= 0")
-        board = resolve_board_profile(args.board)
+        board = require_charuco(resolve_board_profile(args.board), "intrinsics capture")
         client = ZedStreamClient(
             args.host,
             args.port,
@@ -266,6 +300,7 @@ def _cmd_extrinsics(args: argparse.Namespace) -> int:
         cam_cfg, robot_cfg, cap_cfg = cfg["camera"], cfg["robot"], cfg["capture"]
         board = resolve_board_profile(args.board or cfg["board"]["profile"])
         target_link = args.target_link or robot_cfg["target_link"]
+        # Gates are clamped to the target's capabilities inside capture_handeye_session.
         settings = HandEyeCaptureSettings(
             output_root=Path(args.output),
             robot_model=args.robot_model or robot_cfg["model"],
@@ -386,6 +421,15 @@ def build_parser() -> argparse.ArgumentParser:
     verify = board_sub.add_parser("verify")
     verify.add_argument("--board", default="dexmate-10x7")
     verify.add_argument("--image", required=True)
+    identify = board_sub.add_parser(
+        "identify", help="Sweep all ArUco/AprilTag dictionaries to identify an unknown marker"
+    )
+    identify.add_argument("--image", required=True)
+    render = board_sub.add_parser("render", help="Render a printable AprilTag grid PNG")
+    render.add_argument("--board", required=True)
+    render.add_argument("--output", required=True)
+    render.add_argument("--dpi", type=float, default=300.0)
+    render.add_argument("--margin-mm", type=float, default=20.0)
 
     doctor = sub.add_parser("doctor", help="Read-only network and stream checks")
     doctor_sub = doctor.add_subparsers(dest="doctor_command", required=True)

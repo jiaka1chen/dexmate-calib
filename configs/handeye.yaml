@@ -18,7 +18,7 @@ camera:
   fps: 15
   intrinsics_source: sdk_factory  # color K + 8-coefficient rational distortion from the SDK
 board:
-  profile: dexmate-10x7
+  profile: dexmate-10x7      # or apriltag-4x4 / single-tag-66 / any configs/boards/*.yaml (dexcalib board list)
   mounted_on: L_ee
 capture:
   samples: 30

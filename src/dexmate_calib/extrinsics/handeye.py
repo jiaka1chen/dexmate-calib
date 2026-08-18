@@ -60,6 +60,8 @@ class HandEyeView:
     """4x4 pose of the mounting link in the robot base frame (from FK)."""
     T_cam_board_pnp: np.ndarray | None = None
     """4x4 per-view PnP board pose in the camera frame; filled by :func:`solve_hand_eye`."""
+    T_cam_board_candidates: list[np.ndarray] | None = None
+    """All PnP candidates (planar IPPE gives up to two); the chosen one is ``T_cam_board_pnp``."""
 
     def __post_init__(self) -> None:
         self.object_points = np.asarray(self.object_points, dtype=np.float64).reshape(-1, 3)
@@ -109,29 +111,69 @@ def _pose_to_rvec_tvec(T: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return rvec.reshape(3, 1), np.ascontiguousarray(T[:3, 3]).reshape(3, 1)
 
 
+def pnp_board_pose_candidates(
+    object_points: np.ndarray,
+    image_points: np.ndarray,
+    camera_matrix: np.ndarray,
+    dist_coeffs: np.ndarray | None,
+) -> list[np.ndarray]:
+    """Return candidate ``T_cam_board`` poses for one planar view, best first.
+
+    Planar targets are solved with IPPE, which yields up to two solutions (the classic
+    "flip" ambiguity, significant for small or single-tag targets); each is LM-refined,
+    kept if the board is in front of the camera and sorted by reprojection RMS.  Falls
+    back to the iterative solver when IPPE fails.
+    """
+    cv2 = _cv2()
+    obj = np.asarray(object_points, dtype=np.float64).reshape(-1, 1, 3)
+    img = np.asarray(image_points, dtype=np.float64).reshape(-1, 1, 2)
+    if len(obj) < 4:
+        raise ValueError("PnP needs at least 4 board corners")
+    K = np.asarray(camera_matrix, dtype=np.float64)
+    D = None if dist_coeffs is None else np.asarray(dist_coeffs, dtype=np.float64).reshape(-1)
+    raw: list[tuple[np.ndarray, np.ndarray]] = []
+    planar = np.allclose(obj[:, 0, 2], obj[0, 0, 2])
+    if planar:
+        try:
+            _, rvecs, tvecs, _ = cv2.solvePnPGeneric(obj, img, K, D, flags=cv2.SOLVEPNP_IPPE)
+            raw = list(zip(rvecs, tvecs))
+        except cv2.error:
+            raw = []
+    if not raw and len(obj) >= 6:
+        ok, rvec, tvec = cv2.solvePnP(obj, img, K, D, flags=cv2.SOLVEPNP_ITERATIVE)
+        if ok:
+            raw = [(rvec, tvec)]
+    if not raw:
+        raise ValueError("solvePnP failed")
+    scored: list[tuple[float, np.ndarray]] = []
+    for rvec, tvec in raw:
+        rvec, tvec = cv2.solvePnPRefineLM(obj, img, K, D, rvec, tvec)
+        R, _ = cv2.Rodrigues(rvec)
+        T = rt_to_T(R, tvec)
+        if T[2, 3] <= 0.0:
+            continue
+        projected, _ = cv2.projectPoints(obj, rvec, tvec, K, D)
+        rms = _rms_from_residuals(img.reshape(-1, 2) - projected.reshape(-1, 2))
+        scored.append((rms, T))
+    if not scored:
+        raise ValueError("PnP placed the board behind the camera")
+    scored.sort(key=lambda item: item[0])
+    # Drop near-duplicate solutions (IPPE sometimes returns the same pose twice).
+    unique: list[np.ndarray] = []
+    for _, T in scored:
+        if all(pose_error(T, U)[1] > 5e-4 or pose_error(T, U)[0] > 0.05 for U in unique):
+            unique.append(T)
+    return unique
+
+
 def pnp_board_pose(
     object_points: np.ndarray,
     image_points: np.ndarray,
     camera_matrix: np.ndarray,
     dist_coeffs: np.ndarray | None,
 ) -> np.ndarray:
-    """Return ``T_cam_board`` from a single view using iterative PnP + LM refinement."""
-    cv2 = _cv2()
-    obj = np.asarray(object_points, dtype=np.float64).reshape(-1, 1, 3)
-    img = np.asarray(image_points, dtype=np.float64).reshape(-1, 1, 2)
-    if len(obj) < 6:
-        raise ValueError("PnP needs at least 6 board corners")
-    K = np.asarray(camera_matrix, dtype=np.float64)
-    D = None if dist_coeffs is None else np.asarray(dist_coeffs, dtype=np.float64).reshape(-1)
-    ok, rvec, tvec = cv2.solvePnP(obj, img, K, D, flags=cv2.SOLVEPNP_ITERATIVE)
-    if not ok:
-        raise ValueError("solvePnP failed")
-    rvec, tvec = cv2.solvePnPRefineLM(obj, img, K, D, rvec, tvec)
-    R, _ = cv2.Rodrigues(rvec)
-    T = rt_to_T(R, tvec)
-    if T[2, 3] <= 0.0:
-        raise ValueError("PnP placed the board behind the camera")
-    return T
+    """Best single ``T_cam_board`` for one view (see :func:`pnp_board_pose_candidates`)."""
+    return pnp_board_pose_candidates(object_points, image_points, camera_matrix, dist_coeffs)[0]
 
 
 def project_board(
@@ -264,6 +306,26 @@ def _pose_chain_rms(views, X, Y) -> tuple[float, float]:
         rot.append(r_deg)
         trans.append(t_m)
     return float(np.mean(rot)), float(np.mean(trans))
+
+
+def _resolve_pnp_ambiguities(views: list[HandEyeView], X: np.ndarray, Y: np.ndarray) -> int:
+    """Pick, per view, the PnP candidate closest to the chain prediction. Returns #changes."""
+    changed = 0
+    for v in views:
+        cands = v.T_cam_board_candidates or []
+        if len(cands) < 2:
+            continue
+        pred = predicted_T_cam_board(X, v.T_base_link, Y)
+
+        def score(T, _pred=pred):
+            r_deg, t_m = pose_error(_pred, T)
+            return r_deg + 100.0 * t_m  # 1 deg ~ 1 cm
+
+        best = min(cands, key=score)
+        if best is not v.T_cam_board_pnp and score(best) < score(v.T_cam_board_pnp) - 1e-9:
+            v.T_cam_board_pnp = best
+            changed += 1
+    return changed
 
 
 # ------------------------------------------------------------------------- refine
@@ -428,7 +490,12 @@ def solve_hand_eye(
     for v in views:
         try:
             if v.T_cam_board_pnp is None:
-                v.T_cam_board_pnp = pnp_board_pose(v.object_points, v.image_points, K, D)
+                v.T_cam_board_candidates = pnp_board_pose_candidates(
+                    v.object_points, v.image_points, K, D
+                )
+                v.T_cam_board_pnp = v.T_cam_board_candidates[0]
+            elif v.T_cam_board_candidates is None:
+                v.T_cam_board_candidates = [v.T_cam_board_pnp]
             active.append(v)
         except ValueError as exc:
             rejected.append({"view": v.name, "reason": f"pnp_failed: {exc}"})
@@ -437,20 +504,28 @@ def solve_hand_eye(
 
     diversity = motion_diversity(active)
 
-    # Closed-form candidates, keep the one with the lowest reprojection RMS.
-    candidates = initial_hand_eye(active)
-    scored = []
-    for name, X, Y in candidates:
-        rms = _rms_from_residuals(stacked_residuals(active, X, Y, K, D))
-        scored.append((rms, name, X, Y))
-    scored.sort(key=lambda item: item[0])
-    init_rms, init_method, X, Y = scored[0]
+    # Closed-form initialisation; then resolve planar PnP flip ambiguities against the
+    # chain prediction and re-initialise until the candidate choice is stable.
+    flips_total = 0
+    for _ in range(4):
+        candidates = initial_hand_eye(active)
+        scored = []
+        for name, X, Y in candidates:
+            rms = _rms_from_residuals(stacked_residuals(active, X, Y, K, D))
+            scored.append((rms, name, X, Y))
+        scored.sort(key=lambda item: item[0])
+        init_rms, init_method, X, Y = scored[0]
+        flips = _resolve_pnp_ambiguities(active, X, Y)
+        flips_total += flips
+        if flips == 0:
+            break
     init_rot_gap, init_trans_gap = _pose_chain_rms(active, X, Y)
     initialisation = {
         "method": init_method,
         "rms_px": init_rms,
         "mean_pnp_rotation_gap_deg": init_rot_gap,
         "mean_pnp_translation_gap_mm": init_trans_gap * 1000.0,
+        "pnp_flips_resolved": flips_total,
         "candidates": {name: rms for rms, name, _, _ in scored},
     }
 

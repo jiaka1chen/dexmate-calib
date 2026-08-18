@@ -4,9 +4,14 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Union
 
 import yaml
+
+if TYPE_CHECKING:  # pragma: no cover
+    from dexmate_calib.boards.apriltag import AprilTagGridProfile
+
+TARGET_TYPES = ("charuco", "apriltag_grid")
 
 
 @dataclass(frozen=True)
@@ -22,6 +27,8 @@ class BoardProfile:
     dictionary_name: str
     legacy_pattern: bool
     first_marker_id: int
+
+    target_type: str = "charuco"
 
     @property
     def expected_marker_count(self) -> int:
@@ -75,7 +82,7 @@ def _validated_data(raw: Any, source: Path) -> dict[str, Any]:
     if raw.get("schema_version") != 1:
         raise ValueError("Only board schema_version: 1 is supported")
     if raw.get("target_type") != "charuco":
-        raise ValueError("Only target_type: charuco is supported")
+        raise ValueError("_validated_data only handles target_type: charuco")
     if not isinstance(raw.get("name"), str) or not raw["name"].strip():
         raise ValueError("Board profile requires a non-empty name")
 
@@ -150,11 +157,24 @@ def _validated_data(raw: Any, source: Path) -> dict[str, Any]:
     return raw
 
 
-def load_board_profile(path: str | Path) -> BoardProfile:
+AnyBoardProfile = Union[BoardProfile, "AprilTagGridProfile"]
+
+
+def load_board_profile(path: str | Path) -> AnyBoardProfile:
+    """Load a ChArUco (:class:`BoardProfile`) or AprilTag grid profile from YAML."""
     resolved = Path(path).expanduser().resolve()
     if not resolved.is_file():
         raise FileNotFoundError(f"Board profile not found: {resolved}")
     raw = yaml.safe_load(resolved.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise TypeError(f"Board profile must be a mapping: {resolved}")
+    target_type = raw.get("target_type")
+    if target_type == "apriltag_grid":
+        from dexmate_calib.boards.apriltag import load_apriltag_grid_profile
+
+        return load_apriltag_grid_profile(resolved, raw)
+    if target_type != "charuco":
+        raise ValueError(f"Unsupported target_type {target_type!r}; expected one of {TARGET_TYPES}")
     data = _validated_data(raw, resolved)
     canonical = json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")
     geometry = data["geometry"]
@@ -182,11 +202,31 @@ def board_directory() -> Path:
     return project_root() / "configs" / "boards"
 
 
-def available_board_profiles() -> list[BoardProfile]:
+def available_board_profiles() -> list[AnyBoardProfile]:
     return [load_board_profile(path) for path in sorted(board_directory().glob("*.yaml"))]
 
 
-def resolve_board_profile(value: str | Path) -> BoardProfile:
+def require_charuco(profile: AnyBoardProfile, purpose: str = "this command") -> BoardProfile:
+    """Reject non-ChArUco profiles for the intrinsics pipeline (duck-typed on ``target_type``)."""
+    target_type = getattr(profile, "target_type", "charuco")
+    if target_type != "charuco":
+        name = getattr(profile, "name", "?")
+        raise ValueError(f"{purpose} requires a ChArUco board profile; {name!r} is {target_type}")
+    return profile  # type: ignore[return-value]
+
+
+def create_detector(profile: AnyBoardProfile):
+    """Return the detector matching the profile type (ChArUco or AprilTag grid)."""
+    if isinstance(profile, BoardProfile):
+        from dexmate_calib.intrinsics.detector import CharucoDetector
+
+        return CharucoDetector(profile)
+    from dexmate_calib.boards.apriltag import AprilTagGridDetector
+
+    return AprilTagGridDetector(profile)
+
+
+def resolve_board_profile(value: str | Path) -> AnyBoardProfile:
     candidate = Path(value).expanduser()
     if candidate.is_file():
         return load_board_profile(candidate)
