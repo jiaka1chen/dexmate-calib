@@ -68,6 +68,14 @@ class DexmateJointReader:
             raise RuntimeError("DexmateJointReader is not open")
         return str(getattr(self._robot, "_robot_name", "unknown"))
 
+    def component(self, name: str):
+        """Return the underlying dexcontrol component object (arm/torso/head)."""
+        if self._robot is None:
+            raise RuntimeError("DexmateJointReader is not open")
+        if name not in self.components:
+            raise KeyError(f"Component {name!r} not opened; available: {self.components}")
+        return getattr(self._robot, name)
+
     def read(self) -> dict[str, float]:
         if self._robot is None:
             raise RuntimeError("DexmateJointReader is not open")

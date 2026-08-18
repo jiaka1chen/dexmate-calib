@@ -95,6 +95,7 @@ def render_handeye_preview(
     reason: str | None,
     robot_status: str,
     scale: float,
+    extra_lines: list[str] | None = None,
 ) -> np.ndarray:
     frame = detector.draw(image_bgr, detection)
     if scale != 1.0:
@@ -108,6 +109,7 @@ def render_handeye_preview(
             else ""
         ),
         f"robot: {robot_status}",
+        *(extra_lines or []),
     ]
     for i, text in enumerate(lines):
         y = 28 + 26 * i
@@ -180,11 +182,17 @@ def capture_handeye_session(
     settings: HandEyeCaptureSettings,
     *,
     key_source: Callable[[int], int] | None = None,
+    key_handler: Callable[[int], bool] | None = None,
+    status_lines: Callable[[], list[str]] | None = None,
+    save_guard: Callable[[], str | None] | None = None,
 ) -> Path:
     """Run the interactive capture loop and return the session directory.
 
     ``joints`` may be ``None`` for camera-only dry runs; such sessions cannot be solved.
     ``key_source`` overrides ``cv2.waitKey`` (used by tests and headless runs).
+    ``key_handler`` receives every key the loop does not use itself (e.g. teleop);
+    ``status_lines`` adds preview overlay lines; ``save_guard`` may veto a save by
+    returning a reason string.
     """
     import cv2
 
@@ -245,14 +253,19 @@ def capture_handeye_session(
                     status = "stopped_by_user"
                     break
                 trigger = key == 32
+                if not trigger and key >= 0 and key_handler is not None:
+                    key_handler(key)
                 if settings.auto_capture and reason is None:
                     now = time.monotonic()
                     if now - last_auto >= settings.auto_capture_interval_s:
                         trigger = True
                         last_auto = now
                 if trigger:
+                    veto = save_guard() if save_guard is not None else None
                     if reason is not None:
                         robot_status = f"rejected: {reason}"
+                    elif veto is not None:
+                        robot_status = f"rejected: {veto}"
                     else:
                         joint_sample = joints.read_stationary() if joints is not None else None
                         # Re-grab the frame after confirming the robot is still, so image and
@@ -302,6 +315,7 @@ def capture_handeye_session(
                         reason=reason,
                         robot_status=robot_status,
                         scale=settings.preview_scale,
+                        extra_lines=status_lines() if status_lines is not None else None,
                     )
                     cv2.imshow(window, preview)
             else:

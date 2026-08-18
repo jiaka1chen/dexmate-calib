@@ -286,6 +286,8 @@ def _cmd_extrinsics(args: argparse.Namespace) -> int:
             save_depth=not args.no_depth,
         )
         if args.no_robot:
+            if args.teleop:
+                raise ValueError("--teleop needs the robot; remove --no-robot")
             joints_ctx = None
         else:
             from dexmate_calib.robot.dexmate import DexmateJointReader
@@ -316,7 +318,41 @@ def _cmd_extrinsics(args: argparse.Namespace) -> int:
                 session = capture_handeye_session(board, camera, None, settings)
             else:
                 with joints_ctx as joints:
-                    session = capture_handeye_session(board, camera, joints, settings)
+                    hooks: dict = {}
+                    if args.teleop:
+                        from dexmate_calib.robot.teleop import (
+                            KeyboardJointTeleop,
+                            arm_component_for_link,
+                        )
+
+                        arm = arm_component_for_link(target_link)
+                        teleop_components = tuple(
+                            c for c in (arm, "torso") if c in joints_ctx.components
+                        )
+                        teleop = KeyboardJointTeleop(
+                            joints,
+                            teleop_components,
+                            step_deg=args.step_deg,
+                            velocity_scale=args.velocity_scale,
+                        )
+                        settle = float(cap_cfg.get("teleop_settle_s", 1.0))
+
+                        def guard(_teleop=teleop, _settle=settle):
+                            age = _teleop.seconds_since_command()
+                            if age < _settle:
+                                return f"wait {_settle - age:.1f}s after last motion command"
+                            return None
+
+                        hooks = {
+                            "key_handler": teleop.handle_key,
+                            "status_lines": lambda _t=teleop: [_t.status()],
+                            "save_guard": guard,
+                        }
+                        print(
+                            f"teleop enabled for {teleop_components}: keys go to the preview window "
+                            "(w/s step, W/S x4, 0-9 joint, t component, -/= step, SPACE save, q quit)"
+                        )
+                    session = capture_handeye_session(board, camera, joints, settings, **hooks)
         print(session)
         if args.solve and not args.no_robot:
             from dexmate_calib.extrinsics.solve import solve_handeye_session
@@ -451,6 +487,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ex_capture.add_argument(
         "--solve", action="store_true", help="Solve the session right after capture"
+    )
+    ex_capture.add_argument(
+        "--teleop",
+        action="store_true",
+        help="Drive the arm holding the board (and torso) with keys in the preview window",
+    )
+    ex_capture.add_argument(
+        "--step-deg", type=float, default=0.5, help="Teleop joint step per key event"
+    )
+    ex_capture.add_argument(
+        "--velocity-scale", type=float, default=0.3, help="Teleop motion speed (0-1]"
     )
     ex_solve = extrinsics_sub.add_parser("solve", help="Solve T_base_cam for a captured session")
     ex_solve.add_argument("session")

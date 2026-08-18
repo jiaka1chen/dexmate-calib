@@ -29,6 +29,7 @@ capture:
   settle_checks: 3
   settle_interval_s: 0.15
   settle_tolerance_rad: 0.002
+  teleop_settle_s: 1.0        # --teleop: minimum time after the last motion command before SPACE saves
 solve:
   min_views: 8
   min_corners: 12

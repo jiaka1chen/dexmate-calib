@@ -5,7 +5,7 @@ Dexmate 相机标定工具，目前包含两条流程：
 1. **头部 ZED X Mini 左目内参**（`dexcalib intrinsics`），正式模式固定为
    **HD1200 / 1920×1200 / `sl::VIEW::LEFT` rectified image**；
 2. **外部 Azure Kinect ↔ 机器人 base 手眼标定**（`dexcalib extrinsics`，eye-to-hand），
-   板贴在左臂 `L_ee`，机器人只允许手动遥操作移动，详见 [docs/handeye.md](docs/handeye.md)。
+   板贴在左臂 `L_ee`，机器人只允许手动逐关节遥操作移动，详见 [docs/handeye.md](docs/handeye.md)。
 
 推荐使用 `intrinsics quickstart`：本机通过公钥 SSH 保持一个 Nano 会话，在该会话中
 启动固定参数 streamer，验证 stream 后进入采集，并在采集结束或异常时关闭这次会话和
@@ -264,7 +264,7 @@ HD1200 内参用于 HD1080，也不能把 1920×1200 非等比例拉伸到 640×
 ```bash
 dexcalib kinect info                       # 出厂内参、depth→color 外参、serial
 dexcalib extrinsics selftest               # 合成场景自检
-dexcalib extrinsics capture --samples 30   # 另一个终端用 dexcontrol 键盘示例移动机器人，空格保存
+dexcalib extrinsics capture --teleop --samples 30   # 预览窗口里 w/s 逐关节小步动手臂，空格保存
 dexcalib extrinsics solve calibration_data/handeye_kinect/<session>
 ```
 
@@ -292,4 +292,5 @@ FK 链和 capture→solve 的合成 session 端到端。
 - quickstart 不会在 Nano 安装服务、包或持久配置，也不会写入 sudoers。
 - SSH 私钥始终只留在 Mac；只把 `.pub` 公钥追加到远端 `authorized_keys`。
 - 不会在断线重连时静默切换 camera、resolution 或 board profile。
-- 手眼标定从不下发运动指令：机器人只能由操作者通过 dexcontrol 遥操作移动，`dexcalib` 只读关节角。
+- 手眼标定不会自动规划或执行位姿序列：机器人只能由操作者逐关节小步遥操作移动（`--teleop`
+  或 dexcontrol 自带键盘示例），每次按键一步、松手即停。

@@ -15,9 +15,10 @@
 - 机器人：`vega_1p`（`dexmate-urdf`），`base_frame = base`（URDF 根），板贴在 **`L_ee`**
   （左臂法兰）。`base → L_ee` 链上的关节：`torso_j1..3`、`L_arm_j1..7`。
 - 板：`dexmate-10x7`（同内参标定，27 mm 方格，`DICT_5X5_50`）。
-- 运动方式：**只允许手动**。用 dexcontrol 自带的
-  `examples/advanced_examples/keyboard_joint_control.py`（或任意遥操作）移动机器人；
-  `dexcalib` 只读关节角，从不下发运动指令。
+- 运动方式：**只允许手动、逐关节、小步长**。两种等价方式：
+  (a) `dexcalib extrinsics capture --teleop`——预览窗口同时接收运动键和拍照键，单终端；
+  (b) 另开终端跑 dexcontrol 自带的 `examples/advanced_examples/keyboard_joint_control.py`，
+  `dexcalib` 只读关节角。任何情况下 `dexcalib` 都不会自动规划或执行位姿序列。
 
 坐标约定：`T_a_b` 是 4×4 齐次矩阵，把 `b` 系下的点变换到 `a` 系，即 `b` 在 `a` 中的位姿。
 `T_base_cam` 中的 `cam` 是 Kinect **color** 相机光心系（OpenCV：x 右、y 下、z 前）。
@@ -90,19 +91,34 @@ dexcalib kinect snapshot --output calibration_data/kinect_snapshot.png
 
 ### 3. 采集
 
-终端 A（遥操作，来自 dexcontrol）：
+推荐单终端模式（运动 + 拍照都在预览窗口里按键）：
 
 ```bash
-python ~/Projects/dexcontrol/examples/advanced_examples/keyboard_joint_control.py
+dexcalib extrinsics capture --teleop --samples 30
 ```
 
-终端 B（本仓库）：
+`--teleop` 根据 `--target-link` 自动选择要控制的手臂（`L_*` → `left_arm`，`R_*` →
+`right_arm`），并允许用 `t` 切到 `torso`。预览窗口按键：
 
-```bash
-dexcalib extrinsics capture --samples 30
-```
+| 键 | 作用 |
+|---|---|
+| `0`–`6`（torso 为 `0`–`2`） | 选择当前组件的关节序号 |
+| `w` / `s` | 当前关节 +/− 一步（默认 0.5°/次，按住靠系统自动重复连续走） |
+| `W` / `S` | 一步 ×4 |
+| `-` / `=` | 步长减半 / 加倍（上限：臂 3°，躯干 1.5°） |
+| `t` | 在手臂和躯干之间切换 |
+| **空格** | 保存样本 |
+| `q` / `Esc` | 结束 |
 
-预览窗口按 **空格** 保存一个样本，`q`/`Esc` 结束。每次保存时程序会：
+每次按键只发一次 `move_joint_pos(relative=True)`（速度比例默认 0.3，`--velocity-scale`）；
+松开键就没有新命令，机器人不会继续走。最后一次运动命令后 1 s 内（`teleop_settle_s`）空格会
+被拒绝，避免拍到还在收敛的姿态。`--step-deg` 可改单步大小。
+
+双终端模式（不加 `--teleop`）：终端 A 跑
+`python ~/Projects/dexcontrol/examples/advanced_examples/keyboard_joint_control.py --component left_arm`，
+终端 B 跑 `dexcalib extrinsics capture --samples 30`，空格发给预览窗口、`w/s` 发给终端 A。
+
+不论哪种模式，预览窗口按 **空格** 保存一个样本，`q`/`Esc` 结束。每次保存时程序会：
 
 1. 检查板检测质量（角点数 ≥ 20、角点行列 ≥ 3×3）；
 2. 连读 3 次关节角（间隔 0.15 s），最大变化 ≤ 0.002 rad 才认为机器人静止；
@@ -176,3 +192,5 @@ configs/handeye.yaml                       上述所有锁定参数的默认值
 - Kinect 内参默认使用出厂值；如需自标可用同一块板走 `intrinsics` 流程做交叉验证，但目前
   `intrinsics solve` 锁定 ZED 1920×1200 rectified，需要扩展后才能用于 Kinect。
 - 时间同步依赖"静止后再拍"，没有硬件触发；因此静止检查不要关闭。
+- `--teleop` 只做逐关节小步相对运动，没有碰撞检查；靠近关节极限、桌面或自身时请减小步长
+  或改用 dexcontrol 自己的遥操作。
