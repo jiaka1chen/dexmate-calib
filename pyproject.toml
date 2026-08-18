@@ -17,6 +17,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.6"]
+# Dexmate robot access + URDF forward kinematics for hand-eye calibration.
+robot = ["dexcontrol>=0.5.0", "dexmate-urdf>=0.8.0", "pin>=3.0"]
+# Azure Kinect capture. Requires the system libk4a1.4 / libk4a1.4-dev packages first.
+kinect = ["pyk4a>=1.5.0"]
 
 [project.scripts]
 dexcalib = "dexmate_calib.cli:main"
@@ -30,4 +34,5 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
 

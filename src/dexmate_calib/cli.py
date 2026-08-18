@@ -13,6 +13,7 @@ from dexmate_calib.boards.config import (
     resolve_board_profile,
 )
 from dexmate_calib.diagnostics.doctor import doctor_network, doctor_stream, print_report
+from dexmate_calib.extrinsics.config import load_handeye_config
 from dexmate_calib.intrinsics.capture import CaptureSettings, capture_session
 from dexmate_calib.intrinsics.detector import CharucoDetector
 from dexmate_calib.intrinsics.multi_solve import solve_sessions
@@ -172,6 +173,169 @@ def _cmd_intrinsics(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_kinect(args: argparse.Namespace) -> int:
+    from dexmate_calib.cameras.kinect import KinectCamera, kinect_available
+
+    if not kinect_available():
+        raise RuntimeError("pyk4a is not installed; run `uv sync --extra kinect`")
+    cfg = load_handeye_config(args.config)["camera"]
+    with KinectCamera(
+        color_resolution=args.color_resolution or cfg["color_resolution"],
+        depth_mode=args.depth_mode or cfg["depth_mode"],
+        fps=args.fps or int(cfg.get("fps", 15)),
+        expected_serial=None if args.any_serial else str(cfg.get("expected_serial") or "") or None,
+    ) as camera:
+        info = camera.calibration.as_dict()
+        if args.kinect_command == "info":
+            print(json.dumps(info, indent=2))
+            return 0
+        import cv2
+
+        frame = camera.capture()
+        out = Path(args.output).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(out), frame.color_bgr)
+        print(
+            f"wrote {out} ({frame.color_bgr.shape[1]}x{frame.color_bgr.shape[0]}), serial {info['serial']}"
+        )
+        if frame.depth_mm is not None:
+            depth_out = out.with_name(out.stem + "_depth.png")
+            cv2.imwrite(str(depth_out), frame.depth_mm)
+            print(f"wrote {depth_out}")
+        return 0
+
+
+def _cmd_extrinsics(args: argparse.Namespace) -> int:
+    cfg = load_handeye_config(args.config)
+    if args.extrinsics_command == "selftest":
+        from dexmate_calib.extrinsics.handeye import solve_hand_eye
+        from dexmate_calib.extrinsics.synthetic import make_scene
+        from dexmate_calib.geometry.transforms import pose_error
+
+        scene = make_scene(
+            views=args.views,
+            pixel_noise_px=args.pixel_noise,
+            fk_rotation_noise_deg=args.fk_rotation_noise,
+            fk_translation_noise_m=args.fk_translation_noise,
+            outliers=args.outliers,
+            seed=args.seed,
+        )
+        solution = solve_hand_eye(scene.views, scene.camera_matrix, scene.dist_coeffs)
+        rot_deg, trans_m = pose_error(solution.T_base_cam, scene.T_base_cam)
+        print(
+            json.dumps(
+                {
+                    "views": args.views,
+                    "rms_px": solution.rms_px,
+                    "T_base_cam_error_deg": rot_deg,
+                    "T_base_cam_error_mm": trans_m * 1000.0,
+                    "rejected": [r["view"] for r in solution.rejected_views],
+                    "expected_outliers": scene.outlier_views,
+                    "initialisation_rms_px": solution.initialisation["rms_px"],
+                    "leave_one_out": solution.diagnostics.get("leave_one_out"),
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if args.extrinsics_command == "solve":
+        from dexmate_calib.extrinsics.solve import solve_handeye_session
+
+        solve_cfg = cfg["solve"]
+        result = solve_handeye_session(
+            args.session,
+            robot_model=args.robot_model,
+            base_frame=args.base_frame,
+            target_link=args.target_link,
+            min_corners=args.min_corners
+            if args.min_corners is not None
+            else int(solve_cfg["min_corners"]),
+            min_views=args.min_views if args.min_views is not None else int(solve_cfg["min_views"]),
+            huber_px=args.huber if args.huber is not None else float(solve_cfg["huber_px"]),
+            max_view_rms_px=args.max_view_rms
+            if args.max_view_rms is not None
+            else float(solve_cfg["max_view_rms_px"]),
+            leave_one_out=not args.no_leave_one_out and bool(solve_cfg.get("leave_one_out", True)),
+        )
+        print(result)
+        return 0
+    if args.extrinsics_command == "capture":
+        from dexmate_calib.cameras.kinect import KinectCamera
+        from dexmate_calib.extrinsics.capture import HandEyeCaptureSettings, capture_handeye_session
+
+        cam_cfg, robot_cfg, cap_cfg = cfg["camera"], cfg["robot"], cfg["capture"]
+        board = resolve_board_profile(args.board or cfg["board"]["profile"])
+        target_link = args.target_link or robot_cfg["target_link"]
+        settings = HandEyeCaptureSettings(
+            output_root=Path(args.output),
+            robot_model=args.robot_model or robot_cfg["model"],
+            base_frame=args.base_frame or robot_cfg["base_frame"],
+            target_link=target_link,
+            camera_name=cam_cfg.get("name", "kinect_external"),
+            max_samples=args.samples if args.samples is not None else int(cap_cfg["samples"]),
+            min_corners=args.min_corners
+            if args.min_corners is not None
+            else int(cap_cfg["min_corners"]),
+            min_grid_rows=int(cap_cfg.get("min_grid_rows", 3)),
+            min_grid_cols=int(cap_cfg.get("min_grid_cols", 3)),
+            require_stationary=not args.allow_moving
+            and bool(cap_cfg.get("require_stationary", True)),
+            preview=True,
+            preview_scale=args.preview_scale,
+            auto_capture=False,
+            save_depth=not args.no_depth,
+        )
+        if args.no_robot:
+            joints_ctx = None
+        else:
+            from dexmate_calib.robot.dexmate import DexmateJointReader
+            from dexmate_calib.robot.kinematics import FrameKinematics
+
+            # Fail early if the URDF/link combination is invalid; FK itself runs at solve time.
+            fk = FrameKinematics.from_model(settings.robot_model, base_frame=settings.base_frame)
+            if not fk.has_frame(target_link):
+                raise ValueError(f"Link {target_link!r} not in {settings.robot_model} URDF")
+            joints_ctx = DexmateJointReader(
+                components=tuple(
+                    robot_cfg.get("joint_components", ["torso", "left_arm", "right_arm", "head"])
+                ),
+                settle_checks=int(cap_cfg.get("settle_checks", 3)),
+                settle_interval_s=float(cap_cfg.get("settle_interval_s", 0.15)),
+                settle_tolerance_rad=float(cap_cfg.get("settle_tolerance_rad", 0.002)),
+            )
+        camera = KinectCamera(
+            color_resolution=args.color_resolution or cam_cfg["color_resolution"],
+            depth_mode="OFF" if args.no_depth else (args.depth_mode or cam_cfg["depth_mode"]),
+            fps=args.fps or int(cam_cfg.get("fps", 15)),
+            expected_serial=None
+            if args.any_serial
+            else str(cam_cfg.get("expected_serial") or "") or None,
+        )
+        with camera:
+            if joints_ctx is None:
+                session = capture_handeye_session(board, camera, None, settings)
+            else:
+                with joints_ctx as joints:
+                    session = capture_handeye_session(board, camera, joints, settings)
+        print(session)
+        if args.solve and not args.no_robot:
+            from dexmate_calib.extrinsics.solve import solve_handeye_session
+
+            solve_cfg = cfg["solve"]
+            print(
+                solve_handeye_session(
+                    session,
+                    min_views=int(solve_cfg["min_views"]),
+                    min_corners=int(solve_cfg["min_corners"]),
+                    huber_px=float(solve_cfg["huber_px"]),
+                    max_view_rms_px=float(solve_cfg["max_view_rms_px"]),
+                    leave_one_out=bool(solve_cfg.get("leave_one_out", True)),
+                )
+            )
+        return 0
+    raise AssertionError(args.extrinsics_command)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="dexcalib")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -240,6 +404,71 @@ def build_parser() -> argparse.ArgumentParser:
     solve_multi.add_argument("--max-views-per-session", type=int, default=40)
     solve_multi.add_argument("--max-view-error", type=float, default=0.8)
     solve_multi.add_argument("--cross-validation-folds", type=int, default=5)
+    kinect = sub.add_parser("kinect", help="Azure Kinect checks (factory calibration, snapshot)")
+    kinect.add_argument(
+        "--config", default=None, help="hand-eye config YAML (default configs/handeye.yaml)"
+    )
+    kinect_sub = kinect.add_subparsers(dest="kinect_command", required=True)
+    for name in ("info", "snapshot"):
+        k = kinect_sub.add_parser(name)
+        k.add_argument("--color-resolution", default=None)
+        k.add_argument("--depth-mode", default=None)
+        k.add_argument("--fps", type=int, default=None)
+        k.add_argument(
+            "--any-serial", action="store_true", help="Do not enforce the configured serial"
+        )
+        if name == "snapshot":
+            k.add_argument("--output", default="calibration_data/kinect_snapshot.png")
+
+    extrinsics = sub.add_parser("extrinsics", help="External camera eye-to-hand calibration")
+    extrinsics.add_argument(
+        "--config", default=None, help="hand-eye config YAML (default configs/handeye.yaml)"
+    )
+    extrinsics_sub = extrinsics.add_subparsers(dest="extrinsics_command", required=True)
+    ex_capture = extrinsics_sub.add_parser(
+        "capture", help="Manual Kinect + joint capture (SPACE saves)"
+    )
+    ex_capture.add_argument("--board", default=None)
+    ex_capture.add_argument("--output", default="calibration_data/handeye_kinect")
+    ex_capture.add_argument("--samples", type=int, default=None)
+    ex_capture.add_argument("--min-corners", type=int, default=None)
+    ex_capture.add_argument("--robot-model", default=None)
+    ex_capture.add_argument("--base-frame", default=None)
+    ex_capture.add_argument("--target-link", default=None)
+    ex_capture.add_argument("--color-resolution", default=None)
+    ex_capture.add_argument("--depth-mode", default=None)
+    ex_capture.add_argument("--fps", type=int, default=None)
+    ex_capture.add_argument("--any-serial", action="store_true")
+    ex_capture.add_argument(
+        "--no-depth", action="store_true", help="Do not stream/save depth images"
+    )
+    ex_capture.add_argument("--preview-scale", type=float, default=0.5)
+    ex_capture.add_argument(
+        "--allow-moving", action="store_true", help="Save even if joints changed between reads"
+    )
+    ex_capture.add_argument(
+        "--no-robot", action="store_true", help="Camera-only dry run (session cannot be solved)"
+    )
+    ex_capture.add_argument(
+        "--solve", action="store_true", help="Solve the session right after capture"
+    )
+    ex_solve = extrinsics_sub.add_parser("solve", help="Solve T_base_cam for a captured session")
+    ex_solve.add_argument("session")
+    ex_solve.add_argument("--robot-model", default=None)
+    ex_solve.add_argument("--base-frame", default=None)
+    ex_solve.add_argument("--target-link", default=None)
+    ex_solve.add_argument("--min-views", type=int, default=None)
+    ex_solve.add_argument("--min-corners", type=int, default=None)
+    ex_solve.add_argument("--huber", type=float, default=None)
+    ex_solve.add_argument("--max-view-rms", type=float, default=None)
+    ex_solve.add_argument("--no-leave-one-out", action="store_true")
+    ex_self = extrinsics_sub.add_parser("selftest", help="Run the solver on a synthetic scene")
+    ex_self.add_argument("--views", type=int, default=25)
+    ex_self.add_argument("--pixel-noise", type=float, default=0.4)
+    ex_self.add_argument("--fk-rotation-noise", type=float, default=0.03, help="degrees")
+    ex_self.add_argument("--fk-translation-noise", type=float, default=0.0005, help="metres")
+    ex_self.add_argument("--outliers", type=int, default=0)
+    ex_self.add_argument("--seed", type=int, default=0)
     return parser
 
 
@@ -283,8 +512,12 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_doctor(args)
         if args.command == "intrinsics":
             return _cmd_intrinsics(args)
+        if args.command == "kinect":
+            return _cmd_kinect(args)
+        if args.command == "extrinsics":
+            return _cmd_extrinsics(args)
         raise AssertionError(args.command)
-    except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
+    except (ConnectionError, OSError, RuntimeError, TypeError, ValueError, TimeoutError) as exc:
         parser.exit(2, f"error: {exc}\n")
 
 

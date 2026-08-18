@@ -1,7 +1,11 @@
 # dexmate-calib
 
-Dexmate 相机标定工具。当前实现聚焦头部 ZED X Mini 左目内参，正式模式固定为
-**HD1200 / 1920×1200 / `sl::VIEW::LEFT` rectified image**。
+Dexmate 相机标定工具，目前包含两条流程：
+
+1. **头部 ZED X Mini 左目内参**（`dexcalib intrinsics`），正式模式固定为
+   **HD1200 / 1920×1200 / `sl::VIEW::LEFT` rectified image**；
+2. **外部 Azure Kinect ↔ 机器人 base 手眼标定**（`dexcalib extrinsics`，eye-to-hand），
+   板贴在左臂 `L_ee`，机器人只允许手动遥操作移动，详见 [docs/handeye.md](docs/handeye.md)。
 
 推荐使用 `intrinsics quickstart`：本机通过公钥 SSH 保持一个 Nano 会话，在该会话中
 启动固定参数 streamer，验证 stream 后进入采集，并在采集结束或异常时关闭这次会话和
@@ -77,13 +81,17 @@ HD1200、1920×1200、rectified `LEFT`，不能与 raw/HD1080/crop 后的图像�
 
 ## 安装
 
-建议使用独立环境：
+建议使用独立环境（仓库内唯一的 `.venv`，内参与手眼标定共用）：
 
 ```bash
-cd ~/Documents/Projects/dexmate/dexmate-calib
-uv sync --extra dev
+cd ~/Projects/dexmate-calib
+uv sync --extra dev                      # 仅内参 / 离线求解
+uv sync --extra dev --extra robot --extra kinect   # 手眼标定：dexcontrol + pinocchio + pyk4a
 source .venv/bin/activate
 ```
+
+`.python-version` 固定 Python 3.12。`kinect` extra 需要系统先安装 Azure Kinect SDK
+（`libk4a1.4-dev`）；`robot` extra 需要 `dexcontrol` 能连上机器人（`ROBOT_NAME`、zenoh 配置）。
 
 确认 CLI 和标定板：
 
@@ -251,15 +259,30 @@ redundancy 和 reprojection outlier。
 1920×1200 是 source of truth。任何下游 resize/crop 必须显式变换 `K`；不能直接把
 HD1200 内参用于 HD1080，也不能把 1920×1200 非等比例拉伸到 640×360 后仍沿用原 K。
 
+## 外部相机手眼标定（Azure Kinect）
+
+```bash
+dexcalib kinect info                       # 出厂内参、depth→color 外参、serial
+dexcalib extrinsics selftest               # 合成场景自检
+dexcalib extrinsics capture --samples 30   # 另一个终端用 dexcontrol 键盘示例移动机器人，空格保存
+dexcalib extrinsics solve calibration_data/handeye_kinect/<session>
+```
+
+求解 `T_base_link_i · Y = X · T_cam_board_i` 中的 `X = T_base_cam` 与 `Y = T_link_board`：
+PnP → Kronecker 闭式初值 → SE(3) 上以重投影误差做 LM refine（Huber）→ 逐视图剔除 →
+leave-one-out。结果、判定标准、session 与 `results/` 格式见 [docs/handeye.md](docs/handeye.md)。
+所有锁定参数在 `configs/handeye.yaml`。
+
 ## 测试
 
 ```bash
 pytest
 ```
 
-单元测试不需要连接机器人，覆盖 ZS01/ZS02 header、跳过 depth payload、HD1200/serial
-gate、board schema、质量筛选、交叉验证、synthetic rectified pinhole calibration 和完整
-synthetic session 输出。
+单元测试不需要连接机器人或相机，覆盖 ZS01/ZS02 header、跳过 depth payload、HD1200/serial
+gate、board schema、质量筛选、交叉验证、synthetic rectified pinhole calibration、完整
+synthetic session 输出，以及手眼标定的 SE(3) 工具、闭式初值约定、含噪/离群合成场景、URDF
+FK 链和 capture→solve 的合成 session 端到端。
 
 ## 数据与安全
 
@@ -269,3 +292,4 @@ synthetic session 输出。
 - quickstart 不会在 Nano 安装服务、包或持久配置，也不会写入 sudoers。
 - SSH 私钥始终只留在 Mac；只把 `.pub` 公钥追加到远端 `authorized_keys`。
 - 不会在断线重连时静默切换 camera、resolution 或 board profile。
+- 手眼标定从不下发运动指令：机器人只能由操作者通过 dexcontrol 遥操作移动，`dexcalib` 只读关节角。
