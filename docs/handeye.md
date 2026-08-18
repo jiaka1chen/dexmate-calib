@@ -60,16 +60,13 @@ FK 噪声、25 视图时，`T_base_cam` 误差约 0.05° / 1 mm；注入的离�
 
 ```bash
 cd ~/Projects/dexmate-calib
-uv sync --extra dev --extra robot --extra kinect
+sudo scripts/install_kinect_sdk.sh   # Azure Kinect SDK 1.4.2 + udev 规则（一次性）
+scripts/setup_env.sh                 # uv + Python 3.12 + .venv，含 robot/kinect extras
 source .venv/bin/activate
 ```
 
-`kinect` extra 需要系统已安装 Azure Kinect SDK（`libk4a1.4`、`libk4a1.4-dev`、`k4a-tools`）
-和 `/etc/udev/rules.d/99-k4a.rules`。Ubuntu 24.04 上使用微软 18.04 的 deb 加 jammy 的
-`libsoundio1` 即可（安装脚本见 `~/.cache/dexmate-calib/k4a/install_k4a.sh`）。
-
-`robot` extra 需要 `dexcontrol`、`dexmate-urdf`、`pin`（pinocchio）。dexcontrol 连接机器人
-需要 `ROBOT_NAME` 和 `~/.dexmate/comm/zenoh/` 配置，与 V2AP-demo 的 `setup.sh` 相同。
+依赖明细、`--minimal`/`--no-kinect` 变体、dexcontrol 的 `ROBOT_NAME`/zenoh 配置以及常见问题
+见 [install.md](install.md)。
 
 ### 1. 检查 Kinect
 

@@ -81,17 +81,17 @@ HD1200、1920×1200、rectified `LEFT`，不能与 raw/HD1080/crop 后的图像�
 
 ## 安装
 
-建议使用独立环境（仓库内唯一的 `.venv`，内参与手眼标定共用）：
+一站式脚本（完整说明、依赖表和常见问题见 [docs/install.md](docs/install.md)）：
 
 ```bash
 cd ~/Projects/dexmate-calib
-uv sync --extra dev                      # 仅内参 / 离线求解
-uv sync --extra dev --extra robot --extra kinect   # 手眼标定：dexcontrol + pinocchio + pyk4a
+sudo scripts/install_kinect_sdk.sh   # 仅 Kinect 接本机时：Azure Kinect SDK 1.4.2 + udev 规则
+scripts/setup_env.sh                 # uv + 托管 Python 3.12 + .venv（--minimal / --no-kinect 可选）
 source .venv/bin/activate
 ```
 
-`.python-version` 固定 Python 3.12。`kinect` extra 需要系统先安装 Azure Kinect SDK
-（`libk4a1.4-dev`）；`robot` extra 需要 `dexcontrol` 能连上机器人（`ROBOT_NAME`、zenoh 配置）。
+仓库内只有一个 `.venv`，内参与手眼标定共用；手工等价命令是
+`uv sync --managed-python --extra dev --extra robot --extra kinect`。
 
 确认 CLI 和标定板：
 
