@@ -265,7 +265,7 @@ HD1200 内参用于 HD1080，也不能把 1920×1200 非等比例拉伸到 640×
 dexcalib kinect info                       # 出厂内参、depth→color 外参、serial
 dexcalib extrinsics selftest               # 合成场景自检
 dexcalib extrinsics capture --teleop --samples 30   # 预览窗口里 w/s 逐关节小步动手臂，空格保存
-dexcalib extrinsics capture --board single-tag-66 …  # 也可用 AprilTag 网格 / 单个 tag（board identify 可识别未知 tag）
+dexcalib extrinsics capture --board single-tag-75 …  # 也可用 AprilTag 网格 / 单个 tag（board identify 可识别未知 tag）
 dexcalib extrinsics solve calibration_data/handeye_kinect/<session>
 ```
 

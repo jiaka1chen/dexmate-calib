@@ -38,7 +38,7 @@ def target_points(target: str) -> np.ndarray:
         return default_board_points()
     from dexmate_calib.boards.config import resolve_board_profile
 
-    alias = {"apriltag_4x4": "apriltag-4x4", "single_tag": "single-tag-66"}.get(target, target)
+    alias = {"apriltag_4x4": "apriltag-4x4", "single_tag": "single-tag-75"}.get(target, target)
     profile = resolve_board_profile(alias)
     if not hasattr(profile, "object_points"):
         raise ValueError(f"{target!r} is not an AprilTag profile")

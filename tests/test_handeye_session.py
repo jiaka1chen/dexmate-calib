@@ -121,7 +121,7 @@ def _render(board_profile, T_cam_board, K, size):
     ("board_alias", "target", "views", "depth"),
     [
         ("dexmate-10x7", "charuco", 14, (0.6, 1.2)),
-        ("single-tag-66", "single_tag", 24, (0.5, 0.8)),
+        ("single-tag-75", "single_tag", 24, (0.5, 0.8)),
     ],
 )
 def test_capture_and_solve_synthetic_session(tmp_path: Path, board_alias, target, views, depth):

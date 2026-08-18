@@ -1,9 +1,10 @@
-# Single AprilTag, 66 mm black-square edge. Set apriltag.family / layout.tag_id_start to the
-# values reported by `dexcalib board identify --image <photo>` and re-measure tag_size_m with
-# calipers: the translation part of every result scales with it.
+# Single tag36h11 AprilTag, measured black-square edge 75 mm.
+# Set layout.tag_id_start to the id reported by `dexcalib board identify --image <photo>`
+# (the detector only accepts that id). Re-measure tag_size_m with calipers if in doubt:
+# the translation part of every result scales with it.
 schema_version: 1
-name: apriltag_36h11_single_66mm
-aliases: [single-tag-66]
+name: apriltag_36h11_single_75mm
+aliases: [single-tag-75, single-tag]
 target_type: apriltag_grid
 apriltag:
   family: tag36h11
@@ -11,7 +12,7 @@ layout:
   rows: 1
   cols: 1
   tag_id_start: 0
-  tag_size_m: 0.066
+  tag_size_m: 0.075
 frame_convention: >-
   Origin at the tag centre, x right, y down, z into the printed face (OpenCV board
   handedness); corners TL, TR, BR, BL.

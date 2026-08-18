@@ -46,13 +46,13 @@ def _warp_sheet(
 
 def test_profiles_load_and_dispatch():
     grid = resolve_board_profile("apriltag-4x4")
-    single = resolve_board_profile("single-tag-66")
+    single = resolve_board_profile("single-tag-75")
     charuco = resolve_board_profile("dexmate-10x7")
     assert isinstance(grid, AprilTagGridProfile) and grid.target_type == "apriltag_grid"
     assert grid.rows == grid.cols == 4 and grid.tag_ids == list(range(16))
     assert grid.expected_corner_count == 64
     assert single.is_single_tag and single.expected_corner_count == 4
-    assert single.tags[0].size_m == pytest.approx(0.066)
+    assert single.tags[0].size_m == pytest.approx(0.075)
     assert charuco.target_type == "charuco"
     assert isinstance(create_detector(grid), AprilTagGridDetector)
     assert type(create_detector(charuco)).__name__ == "CharucoDetector"
@@ -61,13 +61,13 @@ def test_profiles_load_and_dispatch():
     # Single tag centred at the origin, corners TL, TR, BR, BL in a y-down frame.
     corners = single.object_points()
     assert np.allclose(corners[:, 2], 0.0)
-    assert np.allclose(corners[0, :2], [-0.033, -0.033]) and np.allclose(
-        corners[2, :2], [0.033, 0.033]
+    assert np.allclose(corners[0, :2], [-0.0375, -0.0375]) and np.allclose(
+        corners[2, :2], [0.0375, 0.0375]
     )
 
 
 def test_profile_validation_errors(tmp_path: Path):
-    base = yaml.safe_load(Path("configs/boards/apriltag_36h11_single_66mm.yaml").read_text())
+    base = yaml.safe_load(Path("configs/boards/apriltag_36h11_single_75mm.yaml").read_text())
     for mutate, match in [
         (lambda d: d["apriltag"].__setitem__("family", "tag99"), "family"),
         (lambda d: d["layout"].__setitem__("tag_size_m", -1.0), "tag_size_m"),
@@ -98,7 +98,7 @@ def test_profile_validation_errors(tmp_path: Path):
     assert profile.object_points().shape == (8, 3)
 
 
-@pytest.mark.parametrize("name", ["apriltag-4x4", "single-tag-66"])
+@pytest.mark.parametrize("name", ["apriltag-4x4", "single-tag-75"])
 def test_render_detect_and_corner_geometry(name: str):
     profile = resolve_board_profile(name)
     T = rt_to_T(so3_exp([0.3, -0.2, 0.1]), [-0.05, 0.02, 0.8])
@@ -126,7 +126,7 @@ def test_render_detect_and_corner_geometry(name: str):
 
 
 def test_identify_markers_finds_family_and_id():
-    profile = resolve_board_profile("single-tag-66")
+    profile = resolve_board_profile("single-tag-75")
     frame = _warp_sheet(profile, rt_to_T(so3_exp([0.1, 0.05, 0.0]), [0.0, 0.0, 0.7]))
     found = identify_markers(frame)
     hits = [f for f in found if f["dictionary"] == "DICT_APRILTAG_36h11" and f["id"] == 0]

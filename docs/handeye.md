@@ -34,7 +34,7 @@
 |---|---|---|---|
 | `dexmate-10x7` | `charuco` | 54 | 默认；精度最好，实物已实测 |
 | `apriltag-4x4`（`robotcamcalib-4x4`） | `apriltag_grid` | 64 | 与 RobotCamCalib `compact_apriltag_grid_4x4_tag48mm` 同规格：tag36h11 id 0–15、48 mm、间距 52.17 mm |
-| `single-tag-66` | `apriltag_grid` 1×1 | 4 | 单个 66 mm tag；精度受限，见下 |
+| `single-tag-75` | `apriltag_grid` 1×1 | 4 | 单个 75 mm tag；精度受限，见下 |
 
 AprilTag profile 字段：`apriltag.family`（`tag36h11`/`tag36h10`/`tag25h9`/`tag16h5`）、
 `layout.rows/cols/tag_id_start/tag_size_m/pitch_m`，或显式 `tags: [{id, center_m, size_m}]`
@@ -47,8 +47,8 @@ z 指向纸面内；每个 tag 角点按 OpenCV 顺序 TL、TR、BR、BL。检�
 ```bash
 dexcalib board identify --image photo.png        # 扫描全部 ArUco/AprilTag 字典，识别未知 tag 的家族与 id
 dexcalib board render --board apriltag-4x4 --output grid.png --dpi 300   # 生成可打印 PNG（100% 打印后量尺寸）
-dexcalib board verify --board single-tag-66 --image photo.png            # 用配置检测一张实拍图
-dexcalib extrinsics capture --board single-tag-66 ...                    # 采集时指定目标
+dexcalib board verify --board single-tag-75 --image photo.png            # 用配置检测一张实拍图
+dexcalib extrinsics capture --board single-tag-75 ...                    # 采集时指定目标
 ```
 
 采集/求解的质量门会自动按目标能力收紧（单 tag：最少 4 角点、1×1 网格）。
